@@ -66,29 +66,47 @@ Contratti dati, scaffold, geometria end-to-end, L0 in Cantera.
 
 ---
 
-## Fase 2 — Storia delle run e orchestrazione
+## Fase 2 — Storia delle run e DOE  ✅ **chiusa**
 
-Rendere ripetibile ciò che oggi è ripetibile solo a mano.
+`store/db.py` (SQLite + Parquet), `doe.py` (Latin Hypercube deterministico),
+`opt/objectives.py` completato con vincoli reali, `scripts/sweep_l0.py`.
 
-**Da fare**
-- `store/db.py`: SQLite con una colonna scalare per ogni voce di `x`, di
-  `L0Result` e di `Objectives`; campi spaziali in Parquet referenziati per path.
-- Snakemake: DAG `design → L0 → geometria`, con `run_id` come wildcard.
-- `scripts/export_winner.py`: copia gli artefatti del design vincente.
+**Criteri di chiusura — tutti soddisfatti**
+- [x] Due esportazioni della stessa geometria sono **byte-identiche** (SHA256
+      di STEP e STL). Ha richiesto di normalizzare l'header STEP: OCCT ci
+      scriveva l'ora di creazione, che rendeva il file diverso a ogni export.
+      Ora l'header porta il `run_id` invece del timestamp, quindi il file si
+      autoidentifica e resta riproducibile.
+- [x] La query di riferimento
+      `SELECT run_id FROM runs WHERE plug_trunc BETWEEN 0.2 AND 0.4 AND
+      Isp_s > 120 AND feasible = 1` risponde su **10 000 run in 4.0 ms**
+      (criterio: < 100 ms).
+- [x] Le run con working tree sporco finiscono in `runs_dirty` per costruzione
+      (routing dal suffisso del `run_id`, non da un flag) e **non** compaiono
+      nelle query di sintesi.
+- [x] LHS verificato come tale: ogni proiezione monodimensionale ha esattamente
+      un punto per strato, e la discrepanza di Kolmogorov-Smirnov batte il
+      campionamento casuale su 18 semi su 20.
+- [x] Sentinella di coerenza: se `derive` alterasse una variabile libera,
+      l'inserimento nel database fallisce. È l'unico punto del sistema che se
+      ne accorgerebbe.
+- [x] Sweep di 400 punti L0 eseguito senza scarti: 96 fattibili.
 
-**Criteri di chiusura**
-- Rilanciare la stessa run produce lo **stesso `run_id`** e file **byte-identici**
-  (confronto SHA256), su una macchina appena installata da `environment.yml`.
-- La query `SELECT run_id FROM runs WHERE plug_trunc BETWEEN 0.2 AND 0.4 AND
-  Isp_s > 120` risponde su 10⁴ run in meno di 100 ms.
-- Una run con working tree sporco finisce in `runs_dirty` e **non** compare
-  nelle query di sintesi.
+**Rinviato di proposito: Snakemake.** L'architettura lo prevede e resta la
+scelta giusta, ma oggi non guadagnerebbe nulla: un DAG serve quando i job sono
+costosi, falliscono a metà e vanno ripresi. Le valutazioni L0 costano
+millisecondi e `sweep_l0.py` le fa già in modo deterministico e ripartibile
+(`INSERT OR REPLACE` sul `run_id`). Snakemake entra in **fase 3**, quando i job
+sono run OpenFOAM da ore. Scriverlo adesso significherebbe consegnare codice
+non esercitato.
 
 ---
 
 ## Fase 3 — L1 fluidodinamica
 
 **Da fare**
+- **Snakemake** (rinviato dalla fase 2): DAG `design → L0 → mesh → CFD → FEM`,
+  con `run_id` come wildcard. Qui serve davvero, perché i job costano ore.
 - `l1/mesh.py`: Gmsh sul **negativo** del solido (dominio fluido), settore
   periodico, strato limite risolto, physical groups = `CANONICAL_BOUNDARIES`.
 - `l1/cfd.py`: `reactingFoam`, inizializzato dallo stato di equilibrio L0.

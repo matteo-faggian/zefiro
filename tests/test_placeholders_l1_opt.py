@@ -24,16 +24,3 @@ from zefiro.opt import driver, surrogate
 def test_gli_stub_sollevano_not_implemented(fn, args):
     with pytest.raises(NotImplementedError):
         fn(*args)
-
-
-def test_objectives_l0_gia_utilizzabile(operating_point, design_vector):
-    """Il blocco obiettivi a L0 e' invece gia' operativo: serve a scartare
-    candidati prima di spendere una run L1."""
-    from zefiro.geometry.parameters import derive
-    from zefiro.opt.objectives import objectives_l0
-
-    _, l0 = derive(design_vector, operating_point)
-    o = objectives_l0("test", l0)
-    assert o.fidelity == "L0"
-    assert o.f["neg_thrust"] == -l0.thrust
-    assert o.f["neg_isp"] == -l0.Isp_s

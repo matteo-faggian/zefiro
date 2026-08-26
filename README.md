@@ -25,7 +25,10 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 | Aerospike (metodo di Angelino) | implementato, testato |
 | L0 termochimica (Cantera) | implementato, testato su caso verificabile a mano |
 | Impianto di alimentazione (`feed.py`) | implementato, testato |
-| Identità e riproducibilità delle run | implementato |
+| Identità e riproducibilità delle run | implementato, verificato byte per byte |
+| Database delle run (SQLite + Parquet) | implementato, testato |
+| DOE Latin Hypercube deterministico | implementato, testato |
+| Obiettivi e vincoli L0 | implementato, testato |
 | L1 (OpenFOAM / CalculiX) | stub con contratti fissati |
 | Ottimizzazione e surrogato | stub con contratti fissati |
 
@@ -51,6 +54,14 @@ zefiro-geometry              # genera STEP + STL
 zefiro-geometry --sector     # settore periodico 1/N per la CFD
 
 python scripts/plant_report.py --fad 300 --bottle-T 20   # che motore permette il banco
+python scripts/sweep_l0.py --n 500 --seed 0 --mdot-air 0.05   # DOE su L0 -> runs/runs.db
+```
+
+Il database si interroga in SQL:
+
+```bash
+sqlite3 runs/runs.db "SELECT run_id, thrust, Isp_s, p_c FROM runs
+                      WHERE feasible = 1 ORDER BY thrust DESC LIMIT 10"
 ```
 
 Entrambi falliscono con un elenco dei dati mancanti finché

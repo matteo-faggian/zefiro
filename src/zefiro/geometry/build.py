@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,6 +255,37 @@ def _parse_ascii_stl(data: bytes) -> list[tuple[tuple[float, ...], ...]]:
     return out
 
 
+#: Timestamp fisso scritto nell'header STEP. OCCT ci mette l'ora di creazione,
+#: che rende due esportazioni della STESSA geometria byte-diverse e fa fallire
+#: il criterio di riproducibilita' (docs/architettura.md sezione 5). L'ora non
+#: va persa: sta in `created_utc` nel database, dove e' un dato e non rumore.
+_STEP_EPOCH = "1970-01-01T00:00:00"
+
+
+def normalize_step_header(path: Path, run_id: str) -> None:
+    """Rende l'header STEP deterministico e autoidentificante.
+
+    Sostituisce il nome del modello col `run_id` e il timestamp con un
+    sentinella fisso. Effetto: due export della stessa geometria danno file
+    byte-identici, e aprendo il file si sa a quale run appartiene senza
+    consultare nulla.
+
+    Tocca SOLO l'header: la sezione DATA, cioe' la geometria, non viene
+    sfiorata.
+    """
+    text = path.read_text(encoding="utf-8", errors="surrogateescape")
+    head, sep, rest = text.partition("ENDSEC;")
+    if not sep:
+        raise ValueError(f"{path} non sembra un file STEP: manca ENDSEC nell'header.")
+    head = re.sub(
+        r"FILE_NAME\('[^']*','[^']*'",
+        f"FILE_NAME('zefiro {run_id}','{_STEP_EPOCH}'",
+        head,
+        count=1,
+    )
+    path.write_text(head + sep + rest, encoding="utf-8", errors="surrogateescape")
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     h.update(path.read_bytes())
@@ -273,6 +305,7 @@ def build_and_export(
     step_path = out_dir / f"{run_id}_geometry.step"
     stl_path = out_dir / f"{run_id}_geometry.stl"
     export_step(solid, str(step_path))
+    normalize_step_header(step_path, run_id)
     export_stl(
         solid,
         str(stl_path),

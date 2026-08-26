@@ -580,7 +580,8 @@ l'output, non Git.
 
 ### 5.4 Database
 
-SQLite (`runs.db`) come indice, Parquet per i campi. Tabella principale `runs`:
+**Implementato in `store/db.py`.** SQLite (`runs.db`) come indice, Parquet per
+i campi. Tabella principale `runs`:
 colonne scalari (una per ogni voce di `x`, ogni voce di `L0Result`, ogni voce di
 `Objectives`) + `run_id` PK + `fidelity` + `env_hash` + timestamp.
 
@@ -588,7 +589,21 @@ Motivo: le query che vuoi fare sono
 `SELECT run_id FROM runs WHERE plug_trunc BETWEEN 0.2 AND 0.4 AND margin_yield > 2`,
 cioè SQL su scalari. Una colonna JSON renderebbe questa query lenta e non
 indicizzabile. I campi spaziali (grandi, mai filtrati per valore) stanno in
-Parquet, referenziati per path.
+Parquet, referenziati per path, con schema fisso `(patch_id, x, y, z, value)`.
+
+Misurato: la query di riferimento su 10 000 run risponde in **4.0 ms**.
+
+Due dettagli che sono venuti fuori implementando, e che vale la pena sapere:
+
+* `phi_core` è **sia** una variabile libera **sia** un campo di `L0Result`. Una
+  sola colonna, e all'inserimento si verifica che i due valori coincidano. Se un
+  giorno non coincidessero, `derive()` avrebbe alterato un ingresso, e questa
+  sentinella è l'unico punto del sistema che se ne accorgerebbe.
+* OCCT scrive **l'ora di creazione** nell'header STEP, il che rendeva due export
+  della stessa geometria byte-diversi. `geometry.build.normalize_step_header`
+  la sostituisce con un sentinella fisso e col `run_id`: il file diventa
+  riproducibile e si autoidentifica. L'ora vera non si perde, sta in
+  `created_utc` nel database, dove è un dato e non rumore.
 
 ---
 

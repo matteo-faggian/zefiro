@@ -747,6 +747,83 @@ Il collo di bottiglia è invece **il riduttore**: a 100 g/s d'aria servono
 non è utilizzabile qui, dove servono 5–8 bar. Serve un riduttore di alta
 pressione, e la sua portata massima è un vincolo hard sul punto operativo.
 
+### 8.4 Il punto di progetto scelto: 5 secondi in regime stazionario
+
+**Decisione:** funzionamento stazionario per 5 s, con il riduttore che tiene
+`p_c` costante mentre il serbatoio scende da 10 a 6 bar.
+
+| grandezza | valore | da dove viene |
+|---|---|---|
+| ṁ_aria | 71.8 g/s | 359.4 g estraibili / 5 s, **senza** contare la ricarica del compressore |
+| p_c | 5.22 bar | vincolo lato aria a fine raffica: `p_c(1+0.15) ≤ 6 bar` |
+| spinta | 104 N | L0, espansione in equilibrio spostato |
+| I_sp | 139.5 s (totale) · 2442 s (sul solo GPL) | |
+| D_gola equivalente | 15.9 mm | |
+| ε | 1.46, M_e = 1.75 | |
+| massa di parete | ~705 g di 316L | |
+
+Due scelte meritano di essere motivate.
+
+**Il campo `p_air_supply` in configurazione è la pressione MINIMA del serbatoio,
+non la massima.** Il riduttore tiene `p_c` costante solo finché a monte ha
+almeno `p_c + Δp_iniettore + la propria caduta`. L'istante critico è la *fine*
+della raffica. Dimensionare sui 10 bar iniziali significherebbe progettare per
+un istante che dura zero. Conseguenza inattesa: con questo svuotamento il collo
+di bottiglia si sposta **sull'aria** (6 bar) e non è più il GPL (8 bar).
+
+**La ricarica del compressore non è contata.** Vale 4–7 g/s, cioè il 3–5 % della
+massa, ma è ancora il TODO A. Contarla farebbe dipendere il punto di progetto da
+un numero non misurato; quando leggerai la targa diventerà margine, non un
+aggiustamento. *Un test di `test_config.py` verifica questo bilancio, e ha già
+intercettato una versione precedente in cui la portata era sovrastimata del 5 %.*
+
+Scendere sotto 6 bar darebbe più spinta in modo monotono (155 N a 4 bar), ma
+tre limiti pratici mordono prima: il riduttore ha bisogno di margine a monte,
+la portata di GPL richiesta supera quello che un riduttore da bombola eroga, e
+ε scende sotto 1.2.
+
+### 8.5 Conseguenza termica: il film cooling era nel posto sbagliato
+
+Fissare il tempo di funzionamento rende finalmente rispondibile la domanda
+"serve raffreddare?". Analisi con Bartz (correlazione empirica, ±30 %) più
+parete transitoria 1D risolta esattamente (`zefiro/thermal.py`), proprietà del
+316L **placeholder**:
+
+| | q̇ a t = 0 | T parete a 5 s | esito |
+|---|---|---|---|
+| camera | 0.45 MW/m² | 574 K | comodo |
+| camera + irraggiamento (ε_gas 0.05–0.30) | +66…435 kW/m² | 611…800 K | ancora comodo |
+| **gola** | **4.7 MW/m²** | **1669 K** | **fusione** |
+
+La gola raggiunge 900 °C in **2.2 s** e la fusione a 5 s.
+
+Tre conseguenze, tutte controintuitive rispetto al progetto di partenza:
+
+1. **La camera non ha bisogno di raffreddamento**, e il film iniettato in testa
+   la proteggeva senza che servisse. Peggio: con contrazione 11.7 quel film non
+   arriva alla gola, cioè non arriva dove serve. `f_film` è quindi messo a 0 nel
+   progetto di default — e con esso spariscono i fori da 0.4 e i setti da 0.2 mm
+   che erano sotto qualunque limite SLM. La capacità resta nel codice (bounds
+   0–0.35) per quando il raffreddamento verrà rimesso **alla gola**.
+
+2. **Ispessire la gola satura.** A 2.4 mm si arriva a 1669 K, a 8 mm a 1200 K,
+   e da lì in poi non cambia più nulla: superata la profondità di penetrazione
+   (4.5 mm in 5 s) il materiale in più non viene raggiunto e non partecipa. Il
+   limite smette di essere la capacità termica e diventa la **conducibilità**.
+   Con il 316L (k ≈ 16 W/m·K) lo spessore da solo non risolve la gola.
+
+3. **Il carico strutturale è termico, non di pressione.** A 5.22 bar la tensione
+   circonferenziale in camera è 6 MPa (verificata contro Lamé, scarto 4 %),
+   mentre un gradiente di 100 K in una parete impedita ne produce ~460: un
+   fattore 80. Il FEM della fase 4 è un problema termo-elastico in cui la
+   pressione è quasi irrilevante, e dimensionare lo spessore sulla pressione
+   sarebbe rispondere alla domanda sbagliata.
+
+Le opzioni per la gola, da valutare in fase 3–4 e non prima: film o
+traspirazione **locale** alla gola, inserto ablativo, riduzione del tempo a
+~2 s, oppure accettare l'ossidazione operando a 1200 K con lipbordo ispessito.
+Nessuna di queste è decidibile senza le proprietà reali del 316L SLM (TODO J).
+
 ### 8.4 TODO ancora aperti
 
 Stanno come `null` in `config/`; `zefiro.config.load_operating_point()`
@@ -755,13 +832,13 @@ fallisce con `MissingDatum` elencandoli tutti insieme.
 | # | Dato | Perché blocca | Come ottenerlo |
 |---|---|---|---|
 | A | Aria resa del compressore (l/min) | Fissa la portata continua e quindi la ricarica durante la raffica | targhetta. Attenzione: alcuni dichiarano l'aria *aspirata*, che è 1.3–1.6× l'aria resa |
-| B | Pressione minima utile a valle del serbatoio | Fissa la massa utilizzabile e quindi la durata della raffica | dipende dal riduttore che monti |
+| ~~B~~ | ~~Pressione minima utile~~ | **CHIUSO**: 6 bar, dal vincolo `p_c(1+Δp) ≤ p_min` (§8.4) | resta da confermare con la caduta del riduttore reale |
 | C | Pressione **e** temperatura della bombola, misurate insieme | Identifica la composizione (§8.2). Se c'è butano serve un meccanismo con C4H10 | manometro + termometro, bombola in equilibrio termico |
 | D | Prelievo gassoso o liquido | Se liquido serve un modello di flash a monte di L0 | com'è fatta la presa |
 | E | Tara e peso totale della bombola | Dà la massa di liquido, che entra nel calcolo di autorefrigerazione | la tara è stampigliata sul collare, il peso con una bilancia |
 | F | Portata massima del riduttore GPL (kg/h) | È il vincolo hard sul punto operativo a raffica (§8.3) | datasheet del riduttore |
 | G | `T_air_in`, `T_fuel_in` a valle dei riduttori | L'espansione raffredda: non è temperatura ambiente | misura |
-| H | Punto di progetto: continuo o raffica, e a che ṁ_aria | Dimensiona tutto il motore | **decisione tua** |
+| ~~H~~ | ~~Punto di progetto~~ | **CHIUSO**: 5 s stazionari, ṁ_aria = 71.8 g/s, p_c = 5.22 bar (§8.4) | |
 | I | `C_d` degli iniettori | Determina Δp e se p_c è raggiungibile | geometria + taratura a freddo |
 | J | AISI 316L da SLM: σ_y(T), E(T), α(T), k(T), ρ, σ_ammissibile | È il FEM. I dati SLM sono anisotropi e diversi dal 316L laminato | prove sui tuoi provini, o datasheet per i tuoi parametri di processo |
 | K | Spessore minimo e angolo di overhang della tua macchina SLM | Vincoli geometrici hard: §8.1 mostra che sono attivi | chi gestisce la stampante |

@@ -1,9 +1,19 @@
 # Vettore di progetto di partenza. Sono 12 parametri LIBERI; tutto il resto e'
 # derivato (docs/architettura.md sezione 4.1). Non aggiungere qui un derivato.
 free:
-  p_c_bar:             4.0    # tetto pratico ~6.7 bar dal lato GPL (arch. 1.1)
-  phi_core:            1.00
-  f_film:              0.15
+  # p_c massima compatibile col vincolo lato aria a fine raffica:
+  #   p_c + Dp_ox <= 6 bar  con Dp_ox = 0.15 p_c  ->  p_c <= 5.22 bar
+  # Il lato GPL (8 bar) lascerebbe salire fino a 6.9 bar: con questa scelta di
+  # svuotamento del serbatoio, il collo di bottiglia si e' spostato sull'ARIA.
+  p_c_bar:             5.22
+  phi_core:            0.95
+  # f_film = 0: l'analisi termica a 5 s mostra che la camera arriva a 574 K e
+  # non ha bisogno di protezione, mentre la gola arriva a fusione e il film
+  # iniettato in testa non ci arriva. Tenere f_film > 0 costerebbe spinta e
+  # fori sotto il mezzo millimetro senza risolvere il problema vero.
+  # La capacita' resta nel codice (bounds 0-0.35) per quando il raffreddamento
+  # verra' rimesso ALLA GOLA.
+  f_film:              0.00
   Dc_over_Dt:          3.50
   Lc_over_Dc:          2.40
   N_inj:              12      # INTERO
@@ -12,4 +22,8 @@ free:
   fuel_vel_ratio:      1.65
   conv_half_angle_deg: 32.5
   plug_trunc:          0.80
+  # Nota: a 2.4 mm la gola fonde in 5 s. Ispessire aiuta fino a circa 8 mm,
+  # oltre i quali la temperatura di faccia calda smette di scendere perche' il
+  # limite diventa la conducibilita' e non la capacita' termica. Lo spessore da
+  # solo NON risolve la gola.
   t_wall_mm:           2.4

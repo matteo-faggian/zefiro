@@ -15,15 +15,14 @@ software gira ma i suoi risultati descrivono un motore ipotetico.
 Elenco completo e motivato in `docs/architettura.md` §8.4. Stanno come `null` in
 `config/`.
 
-**La decisione che viene prima di tutte le altre: continuo o raffica.**
-`scripts/plant_report.py` mostra che il compressore 3 HP dà 4–7 g/s continui,
-mentre il serbatoio da 100 L permette 50–150 g/s per 2–8 secondi. Non è una
-sfumatura: in continuo gli iniettori vengono da 0.2 mm e il motore **non è
-stampabile in SLM**; a 50 g/s le quote entrano in un intervallo fabbricabile.
+**Decisione chiusa: 5 s in regime stazionario, ṁ_aria = 71.8 g/s,
+p_c = 5.22 bar, 104 N** (`docs/architettura.md` §8.4). Ne è seguito che il film
+cooling in testa era nel posto sbagliato (§8.5), e `f_film` è a 0.
 
-Poi, in ordine di impatto:
+Resta da chiudere, in ordine di impatto:
 
-1. **Aria resa del compressore** (l/min di targa, non l'aria aspirata).
+1. **Aria resa del compressore** (l/min di targa, non l'aria aspirata). Oggi
+   non è contata nel punto di progetto: quando la avrai, diventa margine.
 2. **Pressione e temperatura della bombola misurate insieme** → composizione.
 3. **Portata massima del riduttore GPL** — a 100 g/s d'aria servono 27 kg/h,
    fuori portata per un riduttore da barbecue.
@@ -138,9 +137,12 @@ non esercitato.
 - **Conservazione dell'integrale nel mapping**: `|∫q̇dA_CFD − ∫q̇dA_FEM| /
   ∫q̇dA_CFD < 10⁻³`, verificata automaticamente. Se non conserva, il FEM sta
   risolvendo un problema diverso da quello posto dalla CFD.
-- Verifica del FEM su un caso a soluzione analitica nota: cilindro in pressione
-  (Lamé) e cilindro con gradiente termico radiale stazionario, entrambi entro
-  l'1 %.
+- Verifica del FEM sui casi analitici già implementati in `zefiro/structural.py`
+  (Lamé per il cilindro in pressione, parete impedita per la tensione termica),
+  entrambi entro l'1 %.
+- **Attenzione a che cosa si sta verificando**: a 5.22 bar la pressione produce
+  6 MPa contro i ~460 del termico. Un FEM che azzecca Lamé e sbaglia il termico
+  passerebbe la verifica e fallirebbe il progetto.
 - Convergenza di mesh sul FEM: σ_von Mises di picco stabile entro il 5 %.
 - Il caso di riferimento **con film cooling disattivato** deve dare una parete
   che supera la temperatura ammissibile. Se non la supera, il modello termico
@@ -211,7 +213,8 @@ Elencati qui perché tacerli li renderebbe invisibili, non inesistenti.
 | 2 | Il **labbro** è modellato come spigolo vivo con spessore radiale `t_wall`. Il metodo di Angelino assume espansione centrata, cioè labbro affilato rispetto alla scala della gola: qui non lo è. | Fase 3: attendersi uno scostamento reale del contorno. |
 | 3 | Nessun modello di **pressione di base** per il plug troncato. `plug_trunc < 1` dà oggi un limite superiore di prestazione. | Fase 3: solo la CFD può dare la pressione di base. |
 | 4 | Nessuno **strato limite** nel contorno: manca la correzione per lo spessore di spostamento δ*. | Fase 4: correggere il contorno con δ* dalla RANS. |
-| 5 | Il **film cooling** entra a L0 solo come sottrazione di massa dal core, senza modello di efficienza. | Fase 3: senza un modello di efficienza, `f_film` non è ottimizzabile. |
+| 5 | **Il raffreddamento della gola non ha ancora una soluzione.** A 5 s la gola arriva a fusione, e ispessire satura a ~8 mm perché il limite diventa la conducibilità del 316L. Opzioni: film o traspirazione *locale*, inserto ablativo, ridurre a ~2 s, o accettare 1200 K con ossidazione. | Fase 3–4. Non decidibile senza le proprietà reali del 316L SLM (TODO J). |
+| 5b | Il **film cooling** entra a L0 solo come sottrazione di massa dal core, senza modello di efficienza, e la sua posizione (testa) è quella sbagliata. | Fase 3: serve un modello di efficienza e un'iniezione vicino alla gola. |
 | 6 | Il GPL è trattato come **gas ideale** all'iniezione. Vicino alla tensione di vapore non lo è. | Fase 0, punto 2: dipende dalla modalità di prelievo. |
 | 7 | Il sistema di **accensione** non è modellato. | Fase 3, se serve simulare il transitorio di avvio. |
 | 8 | Non c'è modello di **stabilità di combustione** (né bassa né alta frequenza). Il Δp iniettore è oggi solo un vincolo di soglia. | Fase 5: se il motore instabile passa i vincoli, il vincolo è sbagliato. |

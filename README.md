@@ -29,6 +29,8 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 | Database delle run (SQLite + Parquet) | implementato, testato |
 | DOE Latin Hypercube deterministico | implementato, testato |
 | Obiettivi e vincoli L0 | implementato, testato |
+| Carico termico e parete transitoria | implementato, verificato su soluzioni analitiche |
+| Stime strutturali analitiche | implementato, testato |
 | L1 (OpenFOAM / CalculiX) | stub con contratti fissati |
 | Ottimizzazione e surrogato | stub con contratti fissati |
 

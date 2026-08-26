@@ -24,6 +24,7 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 | Geometria parametrica → STEP/STL | implementato, testato |
 | Aerospike (metodo di Angelino) | implementato, testato |
 | L0 termochimica (Cantera) | implementato, testato su caso verificabile a mano |
+| Impianto di alimentazione (`feed.py`) | implementato, testato |
 | Identità e riproducibilità delle run | implementato |
 | L1 (OpenFOAM / CalculiX) | stub con contratti fissati |
 | Ottimizzazione e surrogato | stub con contratti fissati |
@@ -48,6 +49,8 @@ pytest -q
 zefiro-l0                    # valutazione termochimica
 zefiro-geometry              # genera STEP + STL
 zefiro-geometry --sector     # settore periodico 1/N per la CFD
+
+python scripts/plant_report.py --fad 300 --bottle-T 20   # che motore permette il banco
 ```
 
 Entrambi falliscono con un elenco dei dati mancanti finché

@@ -12,6 +12,7 @@ dependencies = [
     "cantera>=3.0",
     "build123d>=0.9",
     "pyyaml>=6.0",
+    "CoolProp>=6.4",
 ]
 
 [project.optional-dependencies]

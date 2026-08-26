@@ -12,30 +12,35 @@ software gira ma i suoi risultati descrivono un motore ipotetico.
 
 ## Fase 0 — Chiudere i dati mancanti  ⟵ **BLOCCANTE, e non dipende dal codice**
 
-Nessuno di questi valori è inventabile. Sono elencati in
-`docs/architettura.md` §8 e stanno come `null` in `config/`.
+Elenco completo e motivato in `docs/architettura.md` §8.4. Stanno come `null` in
+`config/`.
 
-Priorità, in ordine di impatto:
+**La decisione che viene prima di tutte le altre: continuo o raffica.**
+`scripts/plant_report.py` mostra che il compressore 3 HP dà 4–7 g/s continui,
+mentre il serbatoio da 100 L permette 50–150 g/s per 2–8 secondi. Non è una
+sfumatura: in continuo gli iniettori vengono da 0.2 mm e il motore **non è
+stampabile in SLM**; a 50 g/s le quote entrano in un intervallo fabbricabile.
 
-1. **Portata d'aria del compressore alla pressione di lavoro.** Non la FAD
-   nominale a 0 bar della targhetta: la portata effettiva a 8–10 bar. Se esiste
-   un serbatoio di accumulo, volume e pressione — permette raffiche a portata
-   molto superiore alla continua, e cambia il dimensionamento di un ordine di
-   grandezza.
-2. **Composizione della bombola GPL** (% propano / n-butano / i-butano) e
-   **modalità di prelievo** (gassoso o liquido).
-3. **Temperature a valle dei due regolatori.** Da misurare: l'espansione
-   attraverso il riduttore raffredda il gas.
-4. **AISI 316L da SLM**: σ_y(T), E(T), α(T), k(T), ρ, criterio di ammissibilità.
-5. **Limiti di processo della stampante**: diametro minimo di foro, spessore
-   minimo, angolo massimo di overhang senza supporto.
+Poi, in ordine di impatto:
+
+1. **Aria resa del compressore** (l/min di targa, non l'aria aspirata).
+2. **Pressione e temperatura della bombola misurate insieme** → composizione.
+3. **Portata massima del riduttore GPL** — a 100 g/s d'aria servono 27 kg/h,
+   fuori portata per un riduttore da barbecue.
+4. **Tara e peso della bombola** → massa di liquido.
+5. **Temperature a valle dei riduttori.**
+6. **AISI 316L da SLM**: σ_y(T), E(T), α(T), k(T), ρ, criterio di ammissibilità.
+7. **Limiti di processo della stampante**: diametro minimo di foro, spessore
+   minimo, angolo massimo di overhang.
 
 **Criteri di chiusura**
 - `config/operating_point.yaml` non contiene più alcun `null`.
-- `config/materials/aisi316l.yaml` ha il campo `source` compilato con una
-  citazione verificabile per ogni proprietà.
-- `pytest tests/test_config.py` va aggiornato: i test che oggi verificano
-  *"i null sono ancora null"* diventano test che verificano i range dei valori.
+- `config/materials/aisi316l.yaml` ha `source` compilato con una citazione
+  verificabile per ogni proprietà.
+- `check_manufacturability` non restituisce violazioni sul punto di progetto
+  scelto.
+- I test di `test_config.py` che oggi verificano *"i null sono ancora null"*
+  diventano test sui range dei valori.
 
 ---
 
@@ -55,6 +60,9 @@ Contratti dati, scaffold, geometria end-to-end, L0 in Cantera.
 - [x] Il contorno dell'aerospike chiude **esattamente** sull'asse al Mach di
       progetto, e l'area di gola geometrica coincide con `πR²/ε`.
 - [x] Il butano non viene sostituito di nascosto: solleva `MissingThermoData`.
+- [x] Impianto di alimentazione (`feed.py`): limiti del compressore per via
+      termodinamica, blowdown del serbatoio, composizione della bombola dedotta
+      da (p, T) misurate, autorefrigerazione. 126 test totali.
 
 ---
 

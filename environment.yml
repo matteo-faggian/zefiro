@@ -17,3 +17,4 @@ dependencies:
   # - pymoo
   - pip:
       - build123d>=0.9
+      - CoolProp>=6.4

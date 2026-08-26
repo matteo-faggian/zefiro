@@ -4,40 +4,79 @@
 # produce numeri credibili e falsi. Riferimento: docs/architettura.md sezione 8.
 
 p_amb_bar:          1.01325     # atmosfera standard al livello del mare
-p_air_supply_bar:   10.0        # [dato utente] massimo del compressore
-p_fuel_supply_bar:   8.0        # [dato utente] massimo della bombola GPL
 
-# --- TODO n.4: temperature a VALLE dei regolatori ---------------------------
+# --- IMPIANTO ARIA ----------------------------------------------------------
+# [dato utente] compressore 3 cavalli, serbatoio 100 litri, max 10 bar.
+p_air_supply_bar:   10.0
+
+plant:
+  compressor:
+    shaft_power_hp:   3.0       # [dato utente] "3 cavalli"
+    # TODO A: la portata di targa ("aria resa" / FAD, in l/min). E' il numero
+    # che serve davvero. Sta sulla targhetta accanto ai giri e alla pressione.
+    # Attenzione: alcuni costruttori dichiarano l'aria ASPIRATA (displacement),
+    # che e' 1.3-1.6 volte l'aria resa. Serve l'aria RESA.
+    fad_litres_per_min: null
+    # Limite termodinamico superiore calcolabile dalla sola potenza:
+    #   3 HP, 1 -> 10 bar, 20 C  =>  11.6 g/s con compressione isoterma ideale
+    #                                 8.2 g/s con adiabatica monostadio ideale
+    # Una macchina reale a pistoni sta ben sotto: attendersi 4-7 g/s.
+  air_tank:
+    volume_litres:    100.0     # [dato utente]
+    p_max_bar:         10.0
+    # Il serbatoio permette RAFFICHE a portata molto superiore alla continua:
+    #   10 -> 6 bar rende 359 g utilizzabili (limite adiabatico)
+    #   a 50 g/s -> 8.2 s ; a 100 g/s -> 3.8 s
+    p_min_usable_bar: null      # TODO B: dipende dal riduttore che monti
+
+# --- IMPIANTO GPL -----------------------------------------------------------
+# [dato utente] bombola da barbecue, indicata a 8 bar.
+# NOTA FISICA: la pressione di una bombola non dipende da quanto liquido resta,
+# ma SOLO da temperatura e composizione. 8 bar assoluti sono compatibili con:
+#     propano ~94 %  a 20 C        (propano puro: 8.37 bar a 20 C)
+#     propano ~65 %  a 30 C
+#     impossibile    a 10 C  (servirebbe piu' del 100 % di propano)
+# Quindi il dato "8 bar" da solo non identifica la miscela: serve la coppia
+# (pressione, temperatura) misurata insieme. Vedi TODO C.
+p_fuel_supply_bar:   8.0
+
+fuel:
+  # TODO C: misura pressione E temperatura della bombola nello stesso momento,
+  # a bombola in equilibrio termico (non subito dopo un prelievo), poi usa
+  # zefiro.feed.composition_from_pressure per ricavare la frazione di propano.
+  # Il valore qui sotto e' propano puro: PLACEHOLDER esplicito, non una misura.
+  composition_mole:
+    C3H8: 1.0
+  # TODO D: prelievo gassoso o liquido. Una bombola da barbecue non ha pescante,
+  # quindi in verticale eroga VAPORE. Con l'autorefrigerazione calcolata
+  # (1 K in 10 s a 7.5 g/s) il vapore basta per le raffiche; il collo di
+  # bottiglia e' semmai il riduttore.
+  phase_at_injection: gas
+  thermo_source: gri30.yaml
+  bottle:
+    tare_kg:          null      # TODO E: stampigliata sul collare
+    total_weight_kg:  null      # TODO E: con una bilancia -> massa di liquido
+    # TODO F: portata massima ammessa dal riduttore [kg/h]. Un riduttore da
+    # barbecue standard eroga 30 mbar e ~1 kg/h: NON e' utilizzabile qui, dove
+    # servono 5-8 bar. Serve un riduttore di alta pressione, e la sua portata
+    # massima e' un vincolo hard sul punto operativo.
+    regulator_max_kg_per_h: null
+
+# --- Temperature a VALLE dei regolatori (TODO G) -----------------------------
 # Non sono la temperatura ambiente: l'espansione attraverso il riduttore e'
-# quasi isentalpica e il coefficiente di Joule-Thomson del propano a queste
-# pressioni e' positivo, quindi il gas ESCE PIU' FREDDO. Vanno misurate.
+# quasi isentalpica e raffredda il gas. Vanno misurate.
 T_air_in_K:         null
 T_fuel_in_K:        null
 
-# --- TODO n.1: IL DATO PIU' IMPORTANTE ---------------------------------------
-# Portata d'aria del compressore alla pressione di lavoro (non la FAD a 0 bar,
-# che e' il numero pubblicitario sulla targhetta). Se c'e' un serbatoio di
-# accumulo, indicare volume e pressione: cambia tutto, perche' permette raffiche
-# a portata molto superiore alla portata continua.
+# --- Portata d'aria del punto di progetto (TODO H) ---------------------------
+# In funzionamento continuo = portata del compressore (TODO A).
+# In funzionamento a raffica = valore scelto da te, e allora burn_time_s va
+# fissato di conseguenza (vedi zefiro.feed.burst_duration).
 mdot_air_max_kg_s:  null
 
-# --- TODO n.5: coefficienti di efflusso degli iniettori ----------------------
-# Determinano Dp e quindi se p_c e' raggiungibile. Da geometria o taratura a
-# freddo con aria.
+# --- TODO I: coefficienti di efflusso degli iniettori ------------------------
 cd_injector_ox:     null
 cd_injector_fuel:   null
 
-# --- TODO n.8 ---------------------------------------------------------------
+# --- TODO J ------------------------------------------------------------------
 burn_time_s:        null
-
-fuel:
-  # TODO n.2: composizione reale della bombola, in percentuali VOLUMETRICHE
-  # (che in fase gassosa coincidono con le molari). Il valore qui sotto e'
-  # propano puro: e' un PLACEHOLDER esplicito, non una misura.
-  # Se metti del butano, serve un meccanismo che contenga C4H10 (gri30 non ce
-  # l'ha e il codice lo dira' con MissingThermoData, non lo sostituira').
-  composition_mole:
-    C3H8: 1.0
-  # TODO n.3: prelievo gassoso o liquido dalla bombola.
-  phase_at_injection: gas
-  thermo_source: gri30.yaml

@@ -16,8 +16,8 @@ Dalle scelte chiuse in fase di intervista:
 | Voce | Scelta | Conseguenza sull'architettura |
 |---|---|---|
 | Ciclo | Pressure-fed, **regolatore a valle** → `p_c` costante | Il punto operativo è **stazionario**: una valutazione per candidato, non una traiettoria. Il loop resta trattabile. |
-| Ossidante | Aria da compressore, `p_max = 10 bar` | `p_c` ha un tetto **hard** ben sotto i 10 bar (§1.1). |
-| Combustibile | GPL da bombola, `p_max = 8 bar` | Il Δp iniettore combustibile è la risorsa più scarsa dell'intero sistema. |
+| Ossidante | Aria da compressore 3 HP + serbatoio 100 L, `p_max = 10 bar` | `p_c` ha un tetto **hard** ben sotto i 10 bar (§1.1). Il serbatoio abilita il funzionamento a raffica (§8.1). |
+| Combustibile | GPL da bombola da barbecue, indicata a 8 bar | Il Δp iniettore combustibile è la risorsa più scarsa dell'intero sistema. La pressione misurata identifica la composizione (§8.2). |
 | Ugello | **Aerospike** (plug anulare, espansione esterna) | Contorno generato per via analitica (metodo di Angelino, §4.3), non tabellato. |
 | Termica | **Film cooling** con GPL | `f_film` è una variabile di progetto, non un post-processing: entra già in L0. |
 | Simmetria | **Settore periodico 3D**, `N_inj` elementi | La geometria deve saper emettere sia il solido completo sia il settore 1/N con facce periodiche marcate. |
@@ -64,8 +64,9 @@ Con aria come ossidante, il rapporto stechiometrico in massa è
 **94 %** del flusso di massa è aria, e di questa il **76 %** è azoto inerte che
 assorbe calore senza contribuire. Due conseguenze operative:
 
-1. La portata d'aria è la risorsa dimensionante. **`ṁ_aria` disponibile dal
-   compressore è oggi il dato mancante più importante del progetto** (§8).
+1. La portata d'aria è la risorsa dimensionante, e con questo impianto la
+   scelta **continuo vs raffica** cambia il motore di un ordine di grandezza
+   (§8.1).
 2. La portata di GPL è piccolissima in assoluto. Il film cooling sottrae
    `f_film` a un flusso già minimo: prima di ottimizzare `f_film` bisogna
    verificare che il GPL disponibile basti a schermare la parete. Il modulo L0
@@ -657,28 +658,103 @@ tracciabile o è un `None` che fa fallire il codice.
 
 ---
 
-## 8. Dati mancanti — TODO espliciti e bloccanti
+## 8. L'impianto e i dati che ancora mancano
 
-Questi valori **non sono stati forniti** e non sono inventabili. Stanno in
-`config/` come `null`; `zefiro.config.load_operating_point()` fallisce con
-`MissingDatum` elencandoli tutti insieme.
+### 8.1 Che cosa l'impianto permette
 
-| # | Dato | Perché blocca | Chi lo sa |
+Dati noti: **compressore 3 cavalli, serbatoio 100 L, max 10 bar**; **bombola GPL
+da barbecue, indicata a 8 bar**. Da questi si ricava molto per via puramente
+termodinamica (`zefiro.feed`, `scripts/plant_report.py`), senza stimare nulla.
+
+**Portata continua.** Il lavoro minimo di compressione da 1 a 10 bar a 20 °C è
+quello isotermo, `w = R T ln(10) = 192.7 kJ/kg`. Con 3 HP all'albero
+(2237 W) questo dà un **limite superiore assoluto di 11.6 g/s**, irraggiungibile
+perché richiederebbe raffreddamento perfetto. Una compressione adiabatica
+monostadio ideale dà 8.2 g/s. Una macchina a pistoni reale sta sotto: attendersi
+**4–7 g/s**. Il numero vero è sulla targhetta come *aria resa* in l/min
+(300 l/min ⇒ 6.0 g/s).
+
+**Portata a raffica — è qui che il serbatoio cambia il progetto.** 100 L a
+10 bar contengono 1188 g d'aria. Scaricando fino a 6 bar se ne estraggono
+**359 g** (limite adiabatico; 475 g nel limite isotermo, ottimistico perché una
+raffica di pochi secondi non ha tempo di scambiare calore con le pareti).
+Quindi:
+
+| ṁ_aria | durata raffica | spinta a p_c = 4 bar | D_gola | Ø foro GPL | Ø foro film |
+|---|---|---|---|---|---|
+| 6 g/s (continuo) | illimitata | 8.2 N | 5.1 mm | 0.20 mm | 0.15 mm |
+| 20 g/s | 26 s | 27 N | 9.2 mm | 0.36 mm | 0.27 mm |
+| 50 g/s | 8.2 s | 68 N | 14.6 mm | 0.57 mm | 0.42 mm |
+| 100 g/s | 3.8 s | 137 N | 20.7 mm | 0.80 mm | 0.60 mm |
+
+La colonna che decide non è la spinta, è **il diametro dei fori**. In
+funzionamento continuo iniettori e fori di film cooling scendono sotto i due
+decimi di millimetro, cioè sotto qualunque limite SLM ragionevole: *il motore
+non sarebbe stampabile*. A partire da ~50 g/s le dimensioni entrano in un
+intervallo fabbricabile. **È il serbatoio, non il compressore, a rendere Zefiro
+costruibile.**
+
+### 8.2 La bombola: la pressione misura la composizione
+
+La pressione di una bombola **non dipende da quanto liquido è rimasto**: finché
+c'è liquido, dipende solo da temperatura e composizione. Per legge di Raoult su
+una miscela binaria propano/butano:
+
+```
+p = x_C3H8 · p_sat,C3H8(T) + (1 − x_C3H8) · p_sat,C4H10(T)
+```
+
+e la relazione si inverte (`feed.composition_from_pressure`). Con p_sat da EOS
+di riferimento (propano: Lemmon 2009; n-butano: Bücker & Wagner 2006), 8 bar
+assoluti implicano:
+
+| T bombola | x_propano dedotto |
+|---|---|
+| 10 °C | 1.34 → **impossibile** |
+| 15 °C | 1.12 → **impossibile** |
+| 20 °C | 0.94 |
+| 25 °C | 0.79 |
+| 30 °C | 0.65 |
+
+Cioè: **un manometro e un termometro letti insieme sostituiscono un'analisi di
+laboratorio.** Finché non hai quella coppia, la composizione resta un TODO.
+
+### 8.3 L'autorefrigerazione non è il problema
+
+Prelevare vapore richiede calore latente, che viene dalla bombola stessa:
+`(m_liq c_liq + m_guscio c_guscio) dT/dt = −ṁ h_fg(T)`. Con 7.5 g/s di propano
+(cioè ṁ_aria = 100 g/s) da una bombola con 6 kg di liquido residuo, la potenza
+sottratta è 2.6 kW e la bombola perde **1.3 K in 10 secondi**: la pressione
+scende da 8.36 a 8.08 bar. Trascurabile.
+
+Il collo di bottiglia è invece **il riduttore**: a 100 g/s d'aria servono
+27 kg/h di GPL. Un riduttore da barbecue standard eroga 30 mbar e circa 1 kg/h —
+non è utilizzabile qui, dove servono 5–8 bar. Serve un riduttore di alta
+pressione, e la sua portata massima è un vincolo hard sul punto operativo.
+
+### 8.4 TODO ancora aperti
+
+Stanno come `null` in `config/`; `zefiro.config.load_operating_point()`
+fallisce con `MissingDatum` elencandoli tutti insieme.
+
+| # | Dato | Perché blocca | Come ottenerlo |
 |---|---|---|---|
-| 1 | **`mdot_air_max`** — portata del compressore a 10 bar (FAD, kg/s o Nl/min), e se c'è un serbatoio di accumulo con relativo volume | Dimensiona `A_t`, quindi **tutta** la geometria e la spinta. Senza questo il modello gira ma i numeri non descrivono il tuo impianto | targhetta del compressore |
-| 2 | **Composizione reale del GPL** (% propano / n-butano / i-butano) | Cambia AFR, T_ad e γ. E se c'è butano serve un meccanismo esterno (§7.2) | scheda tecnica della bombola |
-| 3 | **Fase del GPL all'iniezione** (prelievo gassoso o liquido) | Se liquido, serve un modello di flash/vaporizzazione a monte di L0 e `T_fuel_in` non è la temperatura ambiente. Se gassoso, il prelievo autoraffredda la bombola e `p_fuel` cala nel tempo — cosa che il regolatore non può compensare sotto una certa portata | come è fatta la presa |
-| 4 | `T_air_in`, `T_fuel_in` a valle dei regolatori | Il regolatore produce espansione Joule-Thomson: non è temperatura ambiente | misura o stima da fare insieme |
-| 5 | `C_d` degli iniettori | Determina `Δp` e quindi se `p_c` è raggiungibile | da geometria + letteratura, o taratura a freddo |
-| 6 | **AISI 316L da SLM**: σ_y(T), E(T), α(T), k(T), ρ, e σ_ammissibile scelta | È il FEM. I dati SLM sono **anisotropi** e diversi dal 316L laminato: il valore da manuale non vale | datasheet della macchina/parametri, o prove |
-| 7 | Spessore minimo di parete e angolo di overhang ammessi dalla tua macchina SLM | Sono vincoli geometrici hard: senza, l'ottimizzatore produrrà pezzi non stampabili | chi gestisce la stampante |
-| 8 | `burn_time` di progetto | Con film cooling la parete è quasi-stazionaria, ma il transitorio iniziale è il caso peggiore per lo shock termico | requisito che devi fissare tu |
-| 9 | Sistema di accensione | Determina se serve modellare l'ignizione o solo la combustione stabilizzata | scelta da fare |
-
----
+| A | Aria resa del compressore (l/min) | Fissa la portata continua e quindi la ricarica durante la raffica | targhetta. Attenzione: alcuni dichiarano l'aria *aspirata*, che è 1.3–1.6× l'aria resa |
+| B | Pressione minima utile a valle del serbatoio | Fissa la massa utilizzabile e quindi la durata della raffica | dipende dal riduttore che monti |
+| C | Pressione **e** temperatura della bombola, misurate insieme | Identifica la composizione (§8.2). Se c'è butano serve un meccanismo con C4H10 | manometro + termometro, bombola in equilibrio termico |
+| D | Prelievo gassoso o liquido | Se liquido serve un modello di flash a monte di L0 | com'è fatta la presa |
+| E | Tara e peso totale della bombola | Dà la massa di liquido, che entra nel calcolo di autorefrigerazione | la tara è stampigliata sul collare, il peso con una bilancia |
+| F | Portata massima del riduttore GPL (kg/h) | È il vincolo hard sul punto operativo a raffica (§8.3) | datasheet del riduttore |
+| G | `T_air_in`, `T_fuel_in` a valle dei riduttori | L'espansione raffredda: non è temperatura ambiente | misura |
+| H | Punto di progetto: continuo o raffica, e a che ṁ_aria | Dimensiona tutto il motore | **decisione tua** |
+| I | `C_d` degli iniettori | Determina Δp e se p_c è raggiungibile | geometria + taratura a freddo |
+| J | AISI 316L da SLM: σ_y(T), E(T), α(T), k(T), ρ, σ_ammissibile | È il FEM. I dati SLM sono anisotropi e diversi dal 316L laminato | prove sui tuoi provini, o datasheet per i tuoi parametri di processo |
+| K | Spessore minimo e angolo di overhang della tua macchina SLM | Vincoli geometrici hard: §8.1 mostra che sono attivi | chi gestisce la stampante |
+| L | Sistema di accensione | Determina se modellare l'ignizione o solo la combustione stabilizzata | decisione da fare |
 
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |
 |---|---|---|
 | `zefiro-schema-0.1.0` | 2026-08-26 | Prima definizione. |
+| — | 2026-08-26 | Aggiunto `zefiro.feed` (impianto di alimentazione). Nessun contratto scambiato modificato, quindi `SCHEMA_VERSION` invariata. |

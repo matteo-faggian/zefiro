@@ -747,6 +747,65 @@ Il collo di bottiglia è invece **il riduttore**: a 100 g/s d'aria servono
 non è utilizzabile qui, dove servono 5–8 bar. Serve un riduttore di alta
 pressione, e la sua portata massima è un vincolo hard sul punto operativo.
 
+### 8.6 Raffreddamento ad acqua del banco — la soluzione per la gola
+
+**Il motore verrà provato in giardino, con acqua di rete disponibile.** Questo
+sblocca la gola, che a pozzo termico fondeva in 5 s (§8.5).
+
+Il carico termico integrato lungo tutto il contorno (Bartz su camera,
+convergente, gola e plug) è **15 kW**, cioè il 7.5 % dei 202 kW rilasciati dal
+GPL. Smaltirlo è facile: 11 L/min con un salto di 20 °C. **Il problema non è la
+potenza, è il flusso locale**: la zona di gola ha meno di 1 cm² ma 3.8 MW/m².
+
+Criterio di progetto adottato — il più conservativo possibile: **tenere la
+parete lato acqua sotto la temperatura di saturazione**, cioè evitare del tutto
+l'ebollizione. Così non serve alcuna correlazione di crisi termica per
+dimensionare, e la CHF resta solo come misura di quanto si è lontani dal caso
+peggiore.
+
+Punto di progetto, con acqua a 4 bar e 15 °C:
+
+| grandezza | valore |
+|---|---|
+| luce del canale anulare | 0.5 mm |
+| velocità | 12 m/s (Re = 10 500, dentro il campo di Dittus-Boelter) |
+| h lato acqua | 51 700 W/(m²·K) |
+| portata | 18 L/min |
+| perdita di carico nel canale | 0.90 bar (solo distribuita) |
+| T parete lato acqua | 89 °C, **55 K di margine** all'ebollizione |
+| T parete lato gas | **446 °C** con parete di 1.5 mm |
+
+A 446 °C il 316L ha praticamente tutta la sua resistenza, e la tensione
+meccanica è di 6 MPa. La gola smette di essere un problema.
+
+Tre osservazioni che non vanno perse.
+
+**Con raffreddamento sul dorso, la parete sottile è meglio.** È l'opposto del
+pozzo termico: lì lo spessore era capacità termica (e aiutava fino a saturare),
+qui è solo resistenza in serie. Da 2.4 a 1.0 mm il lato gas scende da 672 a
+338 °C. Il limite diventa la resistenza meccanica, non quella termica — e a
+6 MPa c'è moltissimo margine.
+
+**Non c'è margine sulla portata d'acqua.** Il flusso di gola è **2.0 volte la
+CHF in pool boiling saturo** (Zuber, 1.89 MW/m² a 4 bar). Il progetto regge solo
+perché il liquido resta sottoraffreddato e in convezione forzata. Se l'acqua
+rallenta, si innesca l'ebollizione a film, lo scambio crolla di un ordine di
+grandezza e si torna al caso del pozzo termico, che brucia in pochi secondi.
+**Un interblocco sulla portata d'acqua che chiude l'elettrovalvola del GPL non
+è un accessorio, è parte del progetto.**
+
+**Il raffreddamento ad acqua regala una misura.** Portata e salto di temperatura
+danno una misura *calorimetrica diretta* del calore entrato nelle pareti:
+15 kW su 10 L/min sono 21.5 K, e 1 K di errore sulla misura vale il 5 % sul
+flusso termico. È esattamente il dato con cui validare la CFD in fase 3, dove
+oggi c'è solo Bartz con il suo ±30 %. Vale la pena mettere due termocoppie in
+ingresso e uscita fin dalla prima prova.
+
+**Limite di questa soluzione**: è una soluzione da BANCO. Un motore raffreddato
+ad acqua di rete non vola. Serve a validare combustione, prestazioni e il
+modello termico; il raffreddamento di un eventuale motore volante è un problema
+diverso e successivo.
+
 ### 8.4 Il punto di progetto scelto: 5 secondi in regime stazionario
 
 **Decisione:** funzionamento stazionario per 5 s, con il riduttore che tiene

@@ -31,6 +31,7 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 | Obiettivi e vincoli L0 | implementato, testato |
 | Carico termico e parete transitoria | implementato, verificato su soluzioni analitiche |
 | Stime strutturali analitiche | implementato, testato |
+| Raffreddamento a liquido del banco | implementato, testato |
 | L1 (OpenFOAM / CalculiX) | stub con contratti fissati |
 | Ottimizzazione e surrogato | stub con contratti fissati |
 
@@ -57,6 +58,7 @@ zefiro-geometry --sector     # settore periodico 1/N per la CFD
 
 python scripts/plant_report.py --fad 300 --bottle-T 20   # che motore permette il banco
 python scripts/sweep_l0.py --n 500 --seed 0 --mdot-air 0.05   # DOE su L0 -> runs/runs.db
+python scripts/water_cooling_check.py --p-water 4 --velocity 12  # canale di raffreddamento
 ```
 
 Il database si interroga in SQL:

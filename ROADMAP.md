@@ -104,6 +104,9 @@ non esercitato.
 ## Fase 3 — L1 fluidodinamica
 
 **Da fare**
+- **Validazione calorimetrica**: due termocoppie sull'acqua di raffreddamento
+  danno una misura diretta del calore entrato nelle pareti, con cui verificare
+  la CFD. Oggi al suo posto c'è solo Bartz col suo ±30 %.
 - **Snakemake** (rinviato dalla fase 2): DAG `design → L0 → mesh → CFD → FEM`,
   con `run_id` come wildcard. Qui serve davvero, perché i job costano ore.
 - `l1/mesh.py`: Gmsh sul **negativo** del solido (dominio fluido), settore
@@ -117,6 +120,9 @@ non esercitato.
 - I nomi delle boundary prodotte coincidono **esattamente** con
   `CANONICAL_BOUNDARIES` (test automatico).
 - Bilancio di massa e di energia chiuso entro lo 0.1 % sul dominio.
+- Il calore integrato a parete predetto dalla CFD sta entro il 20 % della
+  misura calorimetrica del banco. È il primo confronto con la realtà del
+  progetto, e va fatto prima di fidarsi di qualunque risultato termico.
 - La CFD riproduce `c*` di L0 entro il 5 % su un caso a φ = 1 senza film
   cooling. Se lo scarto è maggiore, va **spiegato** (perdite di ristagno,
   combustione incompleta) prima di procedere, non tarato.
@@ -213,7 +219,7 @@ Elencati qui perché tacerli li renderebbe invisibili, non inesistenti.
 | 2 | Il **labbro** è modellato come spigolo vivo con spessore radiale `t_wall`. Il metodo di Angelino assume espansione centrata, cioè labbro affilato rispetto alla scala della gola: qui non lo è. | Fase 3: attendersi uno scostamento reale del contorno. |
 | 3 | Nessun modello di **pressione di base** per il plug troncato. `plug_trunc < 1` dà oggi un limite superiore di prestazione. | Fase 3: solo la CFD può dare la pressione di base. |
 | 4 | Nessuno **strato limite** nel contorno: manca la correzione per lo spessore di spostamento δ*. | Fase 4: correggere il contorno con δ* dalla RANS. |
-| 5 | **Il raffreddamento della gola non ha ancora una soluzione.** A 5 s la gola arriva a fusione, e ispessire satura a ~8 mm perché il limite diventa la conducibilità del 316L. Opzioni: film o traspirazione *locale*, inserto ablativo, ridurre a ~2 s, o accettare 1200 K con ossidazione. | Fase 3–4. Non decidibile senza le proprietà reali del 316L SLM (TODO J). |
+| 5 | ~~Il raffreddamento della gola non ha soluzione~~ → **RISOLTO per il banco**: canale ad acqua da 0.5 mm a 12 m/s porta la gola a 446 °C (§8.6). Resta aperto per un eventuale motore volante, che non può portarsi la canna dell'acqua. | Non blocca più la fase 3. |
 | 5b | Il **film cooling** entra a L0 solo come sottrazione di massa dal core, senza modello di efficienza, e la sua posizione (testa) è quella sbagliata. | Fase 3: serve un modello di efficienza e un'iniezione vicino alla gola. |
 | 6 | Il GPL è trattato come **gas ideale** all'iniezione. Vicino alla tensione di vapore non lo è. | Fase 0, punto 2: dipende dalla modalità di prelievo. |
 | 7 | Il sistema di **accensione** non è modellato. | Fase 3, se serve simulare il transitorio di avvio. |

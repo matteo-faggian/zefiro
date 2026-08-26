@@ -1,0 +1,297 @@
+"""Assemblaggio del solido, export STEP/STL e verifiche di tenuta.
+
+NOTA SULLE UNITA'. Il resto del codice e' in SI (metri). Dentro questo modulo
+si lavora in MILLIMETRI, per due motivi concreti:
+  * le tolleranze di OCCT (1e-7 di default) sono tarate su modelli in mm; con
+    un modello in metri una gola da 6 mm diventa 6e-3 e le operazioni booleane
+    iniziano a considerare coincidenti facce distinte;
+  * lo standard STEP AP214 usa il millimetro, quindi non c'e' conversione
+    all'export e nessun lettore CAD deve indovinare la scala.
+La conversione avviene solo alle due frontiere di questo file (`_MM`).
+"""
+from __future__ import annotations
+
+import hashlib
+import math
+import struct
+from dataclasses import dataclass
+from pathlib import Path
+
+from build123d import (
+    Axis,
+    Cylinder,
+    Location,
+    Polyline,
+    Rotation,
+    export_step,
+    export_stl,
+    make_face,
+    revolve,
+)
+
+from zefiro.schemas import GeometryArtifact, GeometryParams
+
+_MM = 1000.0          # m -> mm
+#: Diametro minimo sotto il quale un foro non viene modellato. E' una soglia
+#: NUMERICA (robustezza delle booleane OCCT in mm), non un'affermazione di
+#: fabbricabilita': il limite di processo SLM e' il TODO n.7 e va verificato
+#: separatamente con `check_manufacturability`.
+_NUMERICAL_SLOT_FLOOR_MM = 0.05
+
+
+@dataclass(frozen=True)
+class BuildOptions:
+    sector: bool = False              # True -> ritaglia il settore periodico 1/N
+    stl_tolerance: float = 5.0e-6     # m, tolleranza lineare di tassellazione
+    stl_angular_tolerance: float = 0.2  # rad
+    include_injection: bool = True
+
+
+def wall_profile_mm(p: GeometryParams) -> list[tuple[float, float, float]]:
+    """Poligono chiuso e semplice nel semipiano (x, r), in mm.
+
+    Percorso: faccia posteriore della piastra -> mantello esterno ->
+    esterno del convergente -> faccia del labbro -> lato gas del convergente ->
+    parete di camera -> faccia di iniezione -> corpo centrale -> contorno del
+    plug -> chiusura sull'asse.
+
+    Ne risulta UN SOLO solido connesso: piastra, mantello e plug sono lo stesso
+    pezzo, che e' anche il modo in cui verra' stampato in SLM.
+    """
+    d = p.derived
+    t = d["t_wall"] * _MM
+    tf = d["t_face"] * _MM
+    R_c = d["R_c"] * _MM
+    R_lip = d["R_lip"] * _MM
+    L_c = d["L_c"] * _MM
+    L_conv = d["L_conv"] * _MM
+    r_cb = d["r_centerbody"] * _MM
+    x_lip = L_c + L_conv
+
+    cx = [v * _MM for v in p.plug_contour_x]
+    cr = [v * _MM for v in p.plug_contour_r]
+    x_plug_start = x_lip + cx[0]
+    if x_plug_start <= 0.0:
+        raise ValueError(
+            "Il punto di gola del plug cade a monte della faccia di iniezione: "
+            "camera troppo corta. Alza Lc_over_Dc o conv_half_angle."
+        )
+
+    pts: list[tuple[float, float, float]] = [
+        (-tf, 0.0, 0.0),
+        (-tf, 0.0, R_c + t),
+        (L_c, 0.0, R_c + t),
+        (x_lip, 0.0, R_lip + t),     # esterno del convergente (spessore RADIALE)
+        (x_lip, 0.0, R_lip),         # faccia del labbro, smussata di spessore t
+        (L_c, 0.0, R_c),             # lato gas del convergente, verso monte
+        (0.0, 0.0, R_c),             # parete di camera
+        (0.0, 0.0, r_cb),            # faccia di iniezione, verso l'asse
+        (x_plug_start, 0.0, r_cb),   # corpo centrale cilindrico
+    ]
+    # NB: si salta cx[0]/cr[0], che coincide esattamente con l'ultimo punto
+    # gia' inserito (fine del corpo centrale). Un punto duplicato genera uno
+    # spigolo di lunghezza nulla e OCCT rifiuta la polilinea.
+    pts += [(x_lip + xi, 0.0, ri) for xi, ri in zip(cx[1:], cr[1:])]
+    if cr[-1] > 1.0e-9:                      # plug troncato: faccia di base
+        pts.append((x_lip + cx[-1], 0.0, 0.0))
+    return pts
+
+
+def wetted_area(p: GeometryParams) -> float:
+    """Superficie bagnata dai gas [m^2], per il teorema di Pappo-Guldino.
+
+    Calcolata analiticamente dal profilo, non dal CAD: e' una verifica
+    INDIPENDENTE dalla tassellazione e dalle booleane.
+    """
+    d = p.derived
+    R_c, R_lip = d["R_c"], d["R_lip"]
+    L_c, L_conv, r_cb = d["L_c"], d["L_conv"], d["r_centerbody"]
+    x_lip = L_c + L_conv
+    segs: list[tuple[float, float, float, float]] = [
+        (0.0, R_c, L_c, R_c),                  # parete di camera
+        (L_c, R_c, x_lip, R_lip),              # convergente
+        (0.0, R_c, 0.0, r_cb),                 # faccia di iniezione (anulare)
+        (0.0, r_cb, x_lip + p.plug_contour_x[0], r_cb),   # corpo centrale
+    ]
+    segs += [
+        (x_lip + p.plug_contour_x[i], p.plug_contour_r[i],
+         x_lip + p.plug_contour_x[i + 1], p.plug_contour_r[i + 1])
+        for i in range(len(p.plug_contour_x) - 1)
+    ]
+    total = 0.0
+    for x0, r0, x1, r1 in segs:
+        slant = math.hypot(x1 - x0, r1 - r0)
+        total += math.pi * (r0 + r1) * slant      # frustum laterale
+    return total
+
+
+def build_solid(p: GeometryParams, opts: BuildOptions = BuildOptions()):
+    """Costruisce il solido (mm). Ritorna l'oggetto build123d."""
+    d = p.derived
+    solid = revolve(
+        make_face(Polyline(*wall_profile_mm(p), close=True)),
+        axis=Axis.X,
+        revolution_arc=360.0,
+    )
+
+    if opts.include_injection:
+        solid = _cut_injection(solid, p)
+
+    if opts.sector:
+        N = int(d["N_inj"])
+        span = 360.0 / N
+        # cuneo abbondantemente piu' grande del pezzo, poi intersezione
+        R_big = 4.0 * (d["R_c"] + d["t_wall"]) * _MM
+        L_big = 4.0 * (d["L_c"] + d["L_conv"] + abs(d["x_tip_full"])) * _MM
+        wedge = _wedge(R_big, L_big, span, x0=-2.0 * d["t_face"] * _MM)
+        solid = solid & wedge
+    return solid
+
+
+def _wedge(radius: float, length: float, angle_deg: float, x0: float):
+    """Cuneo angolare [0, angle_deg] attorno all'asse X, come solido di rivoluzione."""
+    pts = [(x0, 0.0, 0.0), (x0, 0.0, radius), (x0 + length, 0.0, radius), (x0 + length, 0.0, 0.0)]
+    return revolve(make_face(Polyline(*pts, close=True)), axis=Axis.X, revolution_arc=angle_deg)
+
+
+def _cut_injection(solid, p: GeometryParams):
+    """Fori ossidante (con swirl), fori combustibile e fessura di film cooling."""
+    d = p.derived
+    N = int(d["N_inj"])
+    tf = d["t_face"] * _MM
+    R_inj = d["R_inj"] * _MM
+    d_ox = d["d_ox"] * _MM
+    d_f = d["d_fuel"] * _MM
+    theta_s = p.free["theta_swirl"]
+    span = 2.0 * math.pi / N
+    depth = 3.0 * tf / max(math.cos(theta_s), 0.2)
+
+    for k in range(N):
+        # ox a 1/4 del passo, fuel a 3/4: entrambi interni al settore [0, span)
+        phi_ox = k * span + 0.25 * span
+        phi_f = k * span + 0.75 * span
+        solid = solid - _hole(R_inj, phi_ox, d_ox, depth, tf, theta_s)
+        solid = solid - _hole(R_inj, phi_f, d_f, depth, tf, 0.0)
+
+    d_film = d["d_film"] * _MM
+    if d_film > _NUMERICAL_SLOT_FLOOR_MM:
+        R_film = d["R_film"] * _MM
+        for k in range(N):
+            phi = k * span + 0.5 * span      # a meta' passo: interno al settore
+            solid = solid - _hole(R_film, phi, d_film, depth, tf, 0.0)
+    return solid
+
+
+def _hole(R_inj: float, phi: float, diameter: float, depth: float, tf: float, swirl: float):
+    """Foro cilindrico, eventualmente inclinato tangenzialmente di `swirl`.
+
+    L'inclinazione e' attorno alla direzione RADIALE locale: produce una
+    componente tangenziale di velocita' (swirl) senza componente radiale, che
+    e' cio' che si vuole da un iniettore a swirl assiale.
+    """
+    cyl = Cylinder(radius=0.5 * diameter, height=depth, rotation=(0.0, 90.0, 0.0))
+    cyl = Rotation(0.0, 0.0, 0.0) * cyl
+    if swirl != 0.0:
+        cyl = Rotation(0.0, 0.0, math.degrees(swirl)) * cyl
+    cyl = Rotation(math.degrees(phi), 0.0, 0.0) * cyl
+    pos = (
+        -tf,
+        R_inj * math.cos(phi),
+        R_inj * math.sin(phi),
+    )
+    return Location(pos) * cyl
+
+
+# --------------------------------------------------------------------------- #
+# Verifica di water-tightness della MESH, indipendente da OCCT
+# --------------------------------------------------------------------------- #
+def stl_is_watertight(path: Path, quantum: float = 1.0e-6) -> tuple[bool, int]:
+    """Vero se ogni spigolo della tassellazione e' condiviso da 2 triangoli.
+
+    Verifica volutamente INDIPENDENTE da `Shape.is_valid` di OCCT: un B-Rep
+    valido puo' tassellare in modo non chiuso se la tolleranza e' troppo lasca,
+    ed e' esattamente quel caso a far fallire il mesher a valle.
+
+    `quantum` [mm] e' la griglia su cui si arrotondano i vertici prima del
+    confronto: serve perche' due triangoli adiacenti possono avere lo stesso
+    vertice con ultimo bit diverso.
+    """
+    data = path.read_bytes()
+    if data[:5].lstrip().lower().startswith(b"solid") and b"facet normal" in data[:2048]:
+        tris = _parse_ascii_stl(data)
+    else:
+        tris = _parse_binary_stl(data)
+
+    edges: dict[tuple, int] = {}
+    for tri in tris:
+        q = [tuple(round(c / quantum) for c in v) for v in tri]
+        for a, b in ((q[0], q[1]), (q[1], q[2]), (q[2], q[0])):
+            key = (a, b) if a <= b else (b, a)
+            edges[key] = edges.get(key, 0) + 1
+    return all(c == 2 for c in edges.values()), len(tris)
+
+
+def _parse_binary_stl(data: bytes) -> list[tuple[tuple[float, ...], ...]]:
+    (n,) = struct.unpack("<I", data[80:84])
+    out = []
+    off = 84
+    for _ in range(n):
+        vals = struct.unpack("<12fH", data[off:off + 50])
+        out.append((vals[3:6], vals[6:9], vals[9:12]))
+        off += 50
+    return out
+
+
+def _parse_ascii_stl(data: bytes) -> list[tuple[tuple[float, ...], ...]]:
+    out, cur = [], []
+    for line in data.decode("ascii", "replace").splitlines():
+        s = line.strip()
+        if s.startswith("vertex"):
+            cur.append(tuple(float(v) for v in s.split()[1:4]))
+            if len(cur) == 3:
+                out.append(tuple(cur))
+                cur = []
+    return out
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def build_and_export(
+    p: GeometryParams,
+    out_dir: Path,
+    run_id: str,
+    opts: BuildOptions = BuildOptions(),
+) -> GeometryArtifact:
+    """Costruisce, esporta STEP + STL e verifica la tenuta due volte."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    solid = build_solid(p, opts)
+
+    step_path = out_dir / f"{run_id}_geometry.step"
+    stl_path = out_dir / f"{run_id}_geometry.stl"
+    export_step(solid, str(step_path))
+    export_stl(
+        solid,
+        str(stl_path),
+        tolerance=opts.stl_tolerance * _MM,
+        angular_tolerance=opts.stl_angular_tolerance,
+    )
+
+    watertight, n_tri = stl_is_watertight(stl_path)
+    return GeometryArtifact(
+        run_id=run_id,
+        step_path=step_path,
+        stl_path=stl_path,
+        params=p,
+        volume=float(solid.volume) / _MM**3,      # mm^3 -> m^3
+        wetted_area=wetted_area(p),
+        is_valid_brep=bool(solid.is_valid),
+        is_watertight_mesh=watertight,
+        n_triangles=n_tri,
+        mesh_tolerance=opts.stl_tolerance,
+        sha256_step=_sha256(step_path),
+        sha256_stl=_sha256(stl_path),
+    )

@@ -1,0 +1,46 @@
+# AISI 316L prodotto per SLM (Selective Laser Melting).
+#
+# ATTENZIONE, e' il TODO n.6: il 316L da SLM NON ha le proprieta' del 316L
+# laminato da manuale. La microstruttura e' a grani colonnari allineati con la
+# direzione di crescita, quindi il materiale e' ANISOTROPO: sigma_y lungo Z
+# (direzione di costruzione) e' tipicamente diverso da quello nel piano XY, e la
+# duttilita' lo e' ancora di piu'. Dipende inoltre da potenza, velocita' di
+# scansione, spessore di strato, strategia di hatching e da un eventuale
+# trattamento termico di distensione.
+#
+# Per questo qui non c'e' nessun numero: metterci i valori del 316L laminato
+# darebbe margini strutturali sbagliati con l'aria di essere giusti.
+#
+# Fonti accettabili, in ordine di preferenza:
+#   1. prove di trazione sui TUOI provini, stampati con i TUOI parametri;
+#   2. datasheet del fornitore di polvere per QUEL set di parametri;
+#   3. letteratura peer-reviewed su 316L SLM, citando l'articolo qui sotto.
+
+name: AISI 316L (SLM)
+source: null              # <-- citazione obbligatoria quando compili i valori
+build_direction: Z
+anisotropic: true
+
+density_kg_m3: null
+
+# Proprieta' dipendenti dalla temperatura: tabelle [T_K, valore].
+# Servono almeno da 300 K a oltre la massima temperatura di parete attesa.
+youngs_modulus_Pa: null       # E(T)
+poisson_ratio: null
+yield_strength_Pa_XY: null    # sigma_y(T), piano di stampa
+yield_strength_Pa_Z: null     # sigma_y(T), direzione di costruzione
+thermal_expansion_1_K: null   # alpha(T)
+thermal_conductivity_W_mK: null   # k(T)
+specific_heat_J_kgK: null     # cp(T)
+
+# Criterio di ammissibilita' strutturale: e' una SCELTA di progetto, non un dato.
+# Va deciso e scritto qui, con la motivazione.
+allowable:
+  criterion: null             # es. "sigma_vm < sigma_y(T)/1.5"
+  safety_factor: null
+  max_wall_temperature_K: null
+
+# Vincoli di processo SLM: TODO n.7
+process:
+  min_feature_size_m: null    # diametro minimo di foro / spessore minimo
+  max_overhang_angle_deg: null  # oltre il quale serve supporto

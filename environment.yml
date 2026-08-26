@@ -1,0 +1,19 @@
+# Ambiente riproducibile. Target UNICO: WSL2 / Ubuntu (vedi docs/architettura.md §2.2).
+# Generare il lock con:  conda-lock -f environment.yml -p linux-64
+name: zefiro
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - numpy
+  - cantera
+  - pyyaml
+  - pip
+  - pytest
+  - ruff
+  # --- fase 3+ ---
+  # - gmsh
+  # - python-gmsh
+  # - pyarrow
+  # - pymoo
+  - pip:
+      - build123d>=0.9

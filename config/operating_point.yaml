@@ -1,0 +1,43 @@
+# Punto operativo di Zefiro. UNITA' INDICATE NEL NOME DEL CAMPO.
+# I `null` sono TODO BLOCCANTI: il codice fallisce con MissingDatum elencandoli
+# tutti insieme. NON sostituirli con valori plausibili: un default inventato
+# produce numeri credibili e falsi. Riferimento: docs/architettura.md sezione 8.
+
+p_amb_bar:          1.01325     # atmosfera standard al livello del mare
+p_air_supply_bar:   10.0        # [dato utente] massimo del compressore
+p_fuel_supply_bar:   8.0        # [dato utente] massimo della bombola GPL
+
+# --- TODO n.4: temperature a VALLE dei regolatori ---------------------------
+# Non sono la temperatura ambiente: l'espansione attraverso il riduttore e'
+# quasi isentalpica e il coefficiente di Joule-Thomson del propano a queste
+# pressioni e' positivo, quindi il gas ESCE PIU' FREDDO. Vanno misurate.
+T_air_in_K:         null
+T_fuel_in_K:        null
+
+# --- TODO n.1: IL DATO PIU' IMPORTANTE ---------------------------------------
+# Portata d'aria del compressore alla pressione di lavoro (non la FAD a 0 bar,
+# che e' il numero pubblicitario sulla targhetta). Se c'e' un serbatoio di
+# accumulo, indicare volume e pressione: cambia tutto, perche' permette raffiche
+# a portata molto superiore alla portata continua.
+mdot_air_max_kg_s:  null
+
+# --- TODO n.5: coefficienti di efflusso degli iniettori ----------------------
+# Determinano Dp e quindi se p_c e' raggiungibile. Da geometria o taratura a
+# freddo con aria.
+cd_injector_ox:     null
+cd_injector_fuel:   null
+
+# --- TODO n.8 ---------------------------------------------------------------
+burn_time_s:        null
+
+fuel:
+  # TODO n.2: composizione reale della bombola, in percentuali VOLUMETRICHE
+  # (che in fase gassosa coincidono con le molari). Il valore qui sotto e'
+  # propano puro: e' un PLACEHOLDER esplicito, non una misura.
+  # Se metti del butano, serve un meccanismo che contenga C4H10 (gri30 non ce
+  # l'ha e il codice lo dira' con MissingThermoData, non lo sostituira').
+  composition_mole:
+    C3H8: 1.0
+  # TODO n.3: prelievo gassoso o liquido dalla bombola.
+  phase_at_injection: gas
+  thermo_source: gri30.yaml

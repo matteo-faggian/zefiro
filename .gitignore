@@ -1,0 +1,10 @@
+runs/
+*.step
+*.stl
+*.msh
+*.db
+*.parquet
+__pycache__/
+*.egg-info/
+.pytest_cache/
+config/mechanisms/*.yaml

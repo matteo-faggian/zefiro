@@ -1,0 +1,15 @@
+# Vettore di progetto di partenza. Sono 12 parametri LIBERI; tutto il resto e'
+# derivato (docs/architettura.md sezione 4.1). Non aggiungere qui un derivato.
+free:
+  p_c_bar:             4.0    # tetto pratico ~6.7 bar dal lato GPL (arch. 1.1)
+  phi_core:            1.00
+  f_film:              0.15
+  Dc_over_Dt:          3.50
+  Lc_over_Dc:          2.40
+  N_inj:              12      # INTERO
+  theta_swirl_deg:    30.0
+  d_ox_ratio:          0.07
+  fuel_vel_ratio:      1.65
+  conv_half_angle_deg: 32.5
+  plug_trunc:          0.80
+  t_wall_mm:           2.4

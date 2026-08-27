@@ -17,15 +17,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 l1  = ["gmsh>=4.11"]
 # pyarrow e' richiesto dal database dei campi di parete
 
 opt = ["pymoo>=0.6", "openmdao>=3.30", "botorch>=0.11"]
-dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4", "httpx>=0.27"]
 
 [project.scripts]
 zefiro-geometry = "zefiro.cli:main_geometry"
 zefiro-l0       = "zefiro.cli:main_l0"
+zefiro-web      = "zefiro.web.server:main"
 
 
 [tool.setuptools.packages.find]

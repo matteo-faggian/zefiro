@@ -119,7 +119,7 @@ class SlabResponse:
     T_hot: np.ndarray        # K, faccia calda
     T_cold: np.ndarray       # K, faccia fredda (dorso)
     q_hot: np.ndarray        # W/m^2 entrante
-    energy_in: float         # J/m^2 integrati
+    energy_in: float         # J/m^2 netti entrati (entrata dal gas meno uscita dal dorso)
     energy_stored: float     # J/m^2 nella parete a fine transitorio
     penetration_depth: float # m, sqrt(alpha t_end)
     biot: float
@@ -136,12 +136,19 @@ def transient_slab(
     T_initial: float = 293.15,
     n_nodes: int = 81,
     n_steps: int = 4000,
+    h_back: float = 0.0,
+    T_back: float = 293.15,
 ) -> SlabResponse:
-    """Parete piana 1D: convezione sulla faccia calda, dorso adiabatico.
+    """Parete piana 1D: convezione sulla faccia calda, dorso adiabatico o raffreddato.
 
-    Perche' il dorso adiabatico: e' il caso PEGGIORE. Qualunque perdita reale
-    verso l'esterno (irraggiamento, convezione naturale) puo' solo abbassare la
-    temperatura. Un progetto che sopravvive con dorso adiabatico sopravvive.
+    Con `h_back = 0` (default) il dorso e' ADIABATICO, che e' il caso peggiore:
+    qualunque perdita reale verso l'esterno puo' solo abbassare la temperatura.
+    Un progetto che sopravvive con dorso adiabatico sopravvive.
+
+    Con `h_back > 0` il dorso scambia con un refrigerante a `T_back`: e' il caso
+    della parete raffreddata ad acqua, dove il transitorio si esaurisce in
+    frazioni di secondo e il regime stazionario e' il caso dimensionante. Serve
+    per confrontare le due strategie sullo stesso grafico.
 
     Perche' 1D: lo spessore e' molto minore del raggio di camera, quindi la
     curvatura e la conduzione assiale sono correzioni del secondo ordine sul
@@ -176,19 +183,21 @@ def transient_slab(
     bi_dx = h_gas * dx / k
     b[0] = 1.0 + r + r * bi_dx
     c[0] = -r
-    # nodo N-1: dorso adiabatico, mezzo volume
+    # nodo N-1: dorso, mezzo volume. h_back = 0 -> adiabatico.
+    bo_dx = h_back * dx / k
     a[-1] = -r
-    b[-1] = 1.0 + r
+    b[-1] = 1.0 + r + r * bo_dx
 
     energy_in = 0.0
     for n in range(n_steps):
         rhs = np.empty(n_nodes)
         rhs[1:-1] = T[1:-1] + 0.5 * r * (T[2:] - 2.0 * T[1:-1] + T[:-2])
         rhs[0] = T[0] + r * (T[1] - T[0] - bi_dx * (T[0] - T_aw)) + r * bi_dx * T_aw
-        rhs[-1] = T[-1] + r * (T[-2] - T[-1])
+        rhs[-1] = T[-1] + r * (T[-2] - T[-1]) - r * bo_dx * T[-1] + 2.0 * r * bo_dx * T_back
         T_new = _thomas(a, b, c, rhs)
         q_mid = h_gas * (T_aw - 0.5 * (T[0] + T_new[0]))
-        energy_in += q_mid * dt
+        q_out = h_back * (0.5 * (T[-1] + T_new[-1]) - T_back)
+        energy_in += (q_mid - q_out) * dt
         T = T_new
         t_hist[n + 1], hot[n + 1], cold[n + 1] = (n + 1) * dt, T[0], T[-1]
         q_hist[n + 1] = h_gas * (T_aw - T[0])

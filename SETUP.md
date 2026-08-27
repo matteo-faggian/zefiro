@@ -137,6 +137,23 @@ crederai vera.
 
 ---
 
+## 5b. Interfaccia web
+
+```bash
+pip install -e ".[web]"
+python scripts/serve.py
+```
+
+Apre il browser su `http://127.0.0.1:8000`. Se i dati operativi in `config/`
+sono ancora `null`, la pagina non lancia una valutazione destinata a fallire:
+evidenzia in ambra i campi da misurare e ti lascia inserire valori provvisori,
+che restano in memoria e **non toccano i file**.
+
+I lavori lunghi (geometria, piano sperimentale) vanno in coda con barra di
+avanzamento invece di bloccare la richiesta. Un solo lavoro alla volta, di
+proposito: OCCT e i solutori numerici non sono thread-safe e sono limitati
+dalla memoria, non dalla CPU.
+
 ## 6. Se qualcosa non va
 
 | sintomo | causa | rimedio |
@@ -147,6 +164,9 @@ crederai vera.
 | `ImportError: OCP` | manca una libreria di sistema | `sudo apt install -y libgl1 libglu1-mesa libxrender1 libxi6` |
 | il `run_id` finisce in `-dirty` | modifiche non committate | normale mentre sviluppi. Quelle run vanno in `runs_dirty` e non compaiono nelle query di sintesi: servono a esplorare, non a concludere |
 | i test sono lentissimi | `ZEFIRO_RUNS` punta su `/mnt/...` | spostalo nel filesystem di WSL |
+| l'interfaccia web dice `INTERFACCIA_ASSENTE` | manca la cartella `web/` | verifica di aver estratto tutto il repo |
+| il 3D resta vuoto | il browser non ha WebGL | aggiorna il browser; il resto della pagina funziona lo stesso |
+| da Windows non apri `localhost:8000` | WSL2 di norma inoltra la porta da solo; se non lo fa, lancia con `--host 0.0.0.0` e usa l'IP di WSL (`hostname -I`) | |
 
 ---
 

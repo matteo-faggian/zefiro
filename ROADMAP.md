@@ -91,6 +91,13 @@ Contratti dati, scaffold, geometria end-to-end, L0 in Cantera.
       ne accorgerebbe.
 - [x] Sweep di 400 punti L0 eseguito senza scarti: 96 fattibili.
 
+**Aggiunta fuori piano: interfaccia web** (`src/zefiro/web/`, `web/`). API
+versionata con errori strutturati, coda per i lavori lunghi, spaccato quotato,
+solido 3D con taglio, grafici termici e storico. Criteri soddisfatti: la GUI
+produce lo **stesso `run_id`** della riga di comando (test dedicato), ogni
+errore di dominio ha un codice stabile, e la pagina non lancia valutazioni
+destinate a fallire quando mancano dati.
+
 **Rinviato di proposito: Snakemake.** L'architettura lo prevede e resta la
 scelta giusta, ma oggi non guadagnerebbe nulla: un DAG serve quando i job sono
 costosi, falliscono a metà e vanno ripresi. Le valutazioni L0 costano

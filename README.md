@@ -32,6 +32,7 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 | Carico termico e parete transitoria | implementato, verificato su soluzioni analitiche |
 | Stime strutturali analitiche | implementato, testato |
 | Raffreddamento a liquido del banco | implementato, testato |
+| Interfaccia web locale (FastAPI + pagina statica) | implementato, testato |
 | L1 (OpenFOAM / CalculiX) | stub con contratti fissati |
 | Ottimizzazione e surrogato | stub con contratti fissati |
 
@@ -69,6 +70,7 @@ zefiro-geometry --sector     # settore periodico 1/N per la CFD
 python scripts/plant_report.py --fad 300 --bottle-T 20   # che motore permette il banco
 python scripts/sweep_l0.py --n 500 --seed 0 --mdot-air 0.05   # DOE su L0 -> runs/runs.db
 python scripts/water_cooling_check.py --p-water 4 --velocity 12  # canale di raffreddamento
+python scripts/serve.py                                          # interfaccia web su localhost:8000
 ```
 
 Il database si interroga in SQL:
@@ -81,6 +83,27 @@ sqlite3 runs/runs.db "SELECT run_id, thrust, Isp_s, p_c FROM runs
 Entrambi falliscono con un elenco dei dati mancanti finché
 `config/operating_point.yaml` contiene dei `null`. **È voluto**: vedi la regola
 qui sotto.
+
+## Interfaccia web
+
+```bash
+pip install -e ".[web]"
+python scripts/serve.py
+```
+
+Apre `http://127.0.0.1:8000`. La pagina ha i 12 parametri con i loro limiti, i
+campi ancora da misurare evidenziati, e restituisce spaccato quotato, vista
+della testa di iniezione, solido 3D navigabile (con taglio a metà), grafici
+termici e lo storico delle valutazioni. Documentazione dell'API su `/api/docs`.
+
+> **Regola architetturale.** Il backend web non contiene fisica: chiama le
+> stesse funzioni della riga di comando, e ogni valutazione produce un `run_id`
+> vero che finisce nello stesso database. Un test
+> (`test_la_gui_produce_lo_stesso_run_id_della_riga_di_comando`) fallisce
+> nell'istante in cui qualcuno introduce una scorciatoia.
+
+Il server ascolta su localhost e non ha autenticazione: è uno strumento da
+scrivania, non un servizio da esporre in rete.
 
 ## Regola del progetto
 

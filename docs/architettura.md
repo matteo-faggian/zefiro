@@ -905,6 +905,45 @@ fallisce con `MissingDatum` elencandoli tutti insieme.
 | K | Spessore minimo e angolo di overhang della tua macchina SLM | Vincoli geometrici hard: §8.1 mostra che sono attivi | chi gestisce la stampante |
 | L | Sistema di accensione | Determina se modellare l'ignizione o solo la combustione stabilizzata | decisione da fare |
 
+## 8bis. L'interfaccia web
+
+Vive in `src/zefiro/web/` (FastAPI) e `web/` (una pagina statica senza build e
+senza CDN). Quattro decisioni, con i loro motivi.
+
+**Il backend non contiene fisica.** `web/service.py` chiama `derive`,
+`evaluate_l0`, `build_and_export` — le stesse della riga di comando — e ogni
+valutazione produce un `run_id` vero che finisce nello stesso database. Se la
+GUI diventasse una seconda strada per far girare i calcoli, produrrebbe numeri
+non riproducibili, cioè esattamente ciò che tutto il progetto evita. La regola
+è resa verificabile da
+`tests/test_web.py::test_la_gui_produce_lo_stesso_run_id_della_riga_di_comando`,
+che fallisce nell'istante in cui qualcuno introduce una scorciatoia.
+
+**Le rotte sono separate dal servizio.** `app.py` valida, chiama, traduce gli
+errori. `service.py` prende dati e restituisce dati, senza sapere nulla di HTTP:
+è chiamabile dai test senza un client, e una futura interfaccia diversa userebbe
+lo stesso codice.
+
+**I lavori lunghi vanno in coda.** Una valutazione L0 costa ~50 ms e si serve
+nella richiesta; la geometria costa ~2 s e uno sweep costa minuti. Bloccare il
+thread per quel tempo significa un browser che gira a vuoto, nessun modo di
+annullare, e un timeout che uccide il lavoro a metà. `web/jobs.py` usa **un solo
+worker**, e non è una limitazione da rimuovere: OCCT e i solutori non sono
+thread-safe e sono limitati dalla memoria, non dalla CPU. Il registro è in
+memoria — niente broker esterno per un utente su localhost. I lavori non
+sopravvivono a un riavvio, ma gli **artefatti sì**, perché ognuno scrive su disco
+sotto il proprio `run_id`: riprodurre un risultato non dipende mai dallo stato
+del server.
+
+**Gli errori hanno un codice, non una stringa.** `web/errors.py` mappa ogni
+errore di dominio a un codice stabile con `details` strutturati, così il
+frontend può evidenziare i campi giusti invece di mostrare un messaggio
+generico. Un errore di dominio non mappato arriverebbe come 500, cioè come se
+fosse colpa del server: un test lo impedisce.
+
+Il server ascolta su localhost e non ha autenticazione: è uno strumento da
+scrivania.
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |

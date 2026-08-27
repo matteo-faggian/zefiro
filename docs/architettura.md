@@ -80,6 +80,7 @@ assorbe calore senza contribuire. Due conseguenze operative:
 ```
 AA_ENGINE/
 ├── pyproject.toml              # package `zefiro`, dipendenze, config pytest/ruff
+├── SETUP.md                    # come installarlo e avviarlo
 ├── environment.yml             # env conda riproducibile (WSL2/Ubuntu)
 ├── README.md
 ├── ROADMAP.md
@@ -172,7 +173,8 @@ Non è una preferenza, sono tre argomenti concreti:
 Windows. Si risolve così: il **repo** vive su `I:\AA_ENGINE` (montato in WSL come
 `/mnt/i/AA_ENGINE`) perché è codice, è piccolo, e ti serve vederlo da Windows.
 La cartella **`runs/`** invece va nel filesystem ext4 di WSL
-(es. `~/zefiro-runs`), con `RUNS_ROOT` da variabile d'ambiente, perché è I/O
+(es. `~/zefiro-runs`), impostata con la variabile d'ambiente `ZEFIRO_RUNS`
+(onorata da `zefiro-l0`, `zefiro-geometry` e `sweep_l0.py`), perché è I/O
 pesante e su drvfs perdi un fattore ~5–10 su file piccoli e numerosi — ed è
 esattamente quello che produce una mesh. Gli artefatti da guardare (STEP, STL,
 `.foam`) si copiano su `I:` solo a fine run.

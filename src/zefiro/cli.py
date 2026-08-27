@@ -3,20 +3,51 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 from zefiro.config import load_design_vector, load_material, load_operating_point
 from zefiro.geometry import BuildOptions, build_and_export
 from zefiro.geometry.parameters import check_manufacturability, derive
+from zefiro.schemas import ZefiroError
 from zefiro.store import env_fingerprint, make_run_id
+
+
+def runs_root() -> Path:
+    """Cartella degli artefatti di run.
+
+    Impostabile con la variabile d'ambiente ZEFIRO_RUNS. Serve perche' sotto
+    WSL il repo sta su /mnt/... (drvfs), dove l'I/O su file piccoli e numerosi
+    e' 5-10 volte piu' lento del filesystem nativo — ed e' esattamente cio' che
+    produce una mesh. Il repo puo' restare su /mnt perche' e' piccolo e vuoi
+    vederlo da Windows; gli artefatti no.
+    """
+    return Path(os.environ.get("ZEFIRO_RUNS", "runs"))
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--operating", type=Path, default=None)
     parser.add_argument("--design", type=Path, default=None)
-    parser.add_argument("--out", type=Path, default=Path("runs"))
+    parser.add_argument("--out", type=Path, default=None,
+                        help="default: $ZEFIRO_RUNS, oppure ./runs")
     parser.add_argument("--mdot-air", type=float, default=None,
                         help="kg/s: sovrascrive mdot_air_max (utile finche' il TODO n.1 e' aperto)")
+
+
+def _guard(fn):
+    """Trasforma un errore di dominio in un messaggio leggibile e codice 2.
+
+    Un TODO non compilato non e' un crash del programma: e' il programma che
+    fa il suo lavoro. Mostrarlo come traceback lo farebbe sembrare un bug.
+    """
+    def wrapped(argv: list[str] | None = None) -> int:
+        try:
+            return fn(argv)
+        except ZefiroError as exc:
+            print(f"\n{type(exc).__name__}: {exc}\n", file=sys.stderr)
+            return 2
+    return wrapped
 
 
 def main_l0(argv: list[str] | None = None) -> int:
@@ -29,7 +60,7 @@ def main_l0(argv: list[str] | None = None) -> int:
     params, l0 = derive(x, op, mdot_air=args.mdot_air)
 
     run_id = make_run_id(x, op)
-    out = args.out / run_id
+    out = (args.out or runs_root()) / run_id
     out.mkdir(parents=True, exist_ok=True)
     (out / "l0.json").write_text(l0.to_json(), encoding="utf-8")
     (out / "design.json").write_text(x.to_json(), encoding="utf-8")
@@ -58,11 +89,10 @@ def main_geometry(argv: list[str] | None = None) -> int:
     x = load_design_vector(args.design)
     params, l0 = derive(x, op, mdot_air=args.mdot_air)
     run_id = make_run_id(x, op)
+    out = (args.out or runs_root()) / run_id
 
-    art = build_and_export(params, args.out / run_id, run_id, BuildOptions(sector=args.sector))
-    (args.out / run_id / "geometry_params.json").write_text(
-        params.to_json(), encoding="utf-8"
-    )
+    art = build_and_export(params, out, run_id, BuildOptions(sector=args.sector))
+    (out / "geometry_params.json").write_text(params.to_json(), encoding="utf-8")
 
     print(f"run_id       {run_id}")
     print(f"STEP         {art.step_path}")
@@ -76,3 +106,7 @@ def main_geometry(argv: list[str] | None = None) -> int:
     for msg in check_manufacturability(params, mat["process"]["min_feature_size_m"]):
         print(f"FABBRICABILITA': {msg}")
     return 0
+
+
+main_l0 = _guard(main_l0)
+main_geometry = _guard(main_geometry)

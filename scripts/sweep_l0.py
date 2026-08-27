@@ -20,6 +20,7 @@ from hashlib import blake2b
 from json import dumps
 from pathlib import Path
 
+from zefiro.cli import runs_root
 from zefiro.config import load_design_vector, load_material, load_operating_point
 from zefiro.doe import latin_hypercube
 from zefiro.geometry import build_and_export
@@ -35,11 +36,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n", type=int, default=200)
     ap.add_argument("--seed", type=int, required=True,
                     help="obbligatorio: un DOE non riproducibile non entra nel database")
-    ap.add_argument("--db", type=Path, default=Path("runs/runs.db"))
+    ap.add_argument("--db", type=Path, default=None,
+                    help="default: $ZEFIRO_RUNS/runs.db, oppure ./runs/runs.db")
     ap.add_argument("--operating", type=Path, default=None)
     ap.add_argument("--mdot-air", type=float, default=None)
     ap.add_argument("--with-geometry", action="store_true")
     args = ap.parse_args(argv)
+    db_path = args.db or (runs_root() / "runs.db")
 
     op = load_operating_point(args.operating)
     material = load_material()
@@ -53,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ok = skipped = 0
     tmp = Path(tempfile.mkdtemp(prefix="zefiro-sweep-"))
-    with RunStore(args.db) as store:
+    with RunStore(db_path) as store:
         for i, values in enumerate(samples):
             try:
                 x = DesignVector(values=values, bounds=DESIGN_BOUNDS)
@@ -79,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {i+1}/{len(samples)}  ok={ok} skip={skipped}", file=sys.stderr)
 
         print(f"\nvalutati {ok}, scartati {skipped}")
-        print(f"database: {args.db}  ({store.count('runs')} run pulite, "
+        print(f"database: {db_path}  ({store.count('runs')} run pulite, "
               f"{store.count('runs_dirty')} sporche)")
         feas = store.query("SELECT COUNT(*) c FROM runs WHERE feasible = 1")[0]["c"]
         print(f"fattibili: {feas}")

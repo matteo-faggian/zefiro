@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from zefiro.config import CONFIG_DIR, load_design_vector, load_material, load_operating_point
 from zefiro.feed import tank_blowdown
 from zefiro.schemas import MissingDatum
@@ -110,3 +112,14 @@ def test_materiale_316l_non_contiene_valori_inventati():
     assert m["thermal_conductivity_W_mK"] is None
     assert m["process"]["min_feature_size_m"] is None
     assert m["anisotropic"] is True
+
+
+def test_la_cartella_delle_run_e_configurabile(monkeypatch, tmp_path):
+    """Sotto WSL il repo sta su drvfs, dove l'I/O su file piccoli e numerosi e'
+    5-10 volte piu' lento. Gli artefatti devono poter stare altrove."""
+    from zefiro.cli import runs_root
+
+    monkeypatch.delenv("ZEFIRO_RUNS", raising=False)
+    assert runs_root() == Path("runs")
+    monkeypatch.setenv("ZEFIRO_RUNS", str(tmp_path / "altrove"))
+    assert runs_root() == tmp_path / "altrove"

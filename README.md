@@ -37,17 +37,27 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 
 ## Installazione
 
-Target unico: **WSL2 / Ubuntu**. La motivazione è in
-`docs/architettura.md` §2.2 — in breve: OpenFOAM e CalculiX girano solo lì, e
-attraversare il confine Windows/WSL a ogni valutazione costa tempo e rompe la
-riproducibilità binaria.
+Istruzioni complete e verificate: **[`SETUP.md`](SETUP.md)**. In breve, dentro
+WSL2/Ubuntu:
 
 ```bash
-conda env create -f environment.yml
-conda activate zefiro
+bash scripts/bootstrap.sh
+```
+
+Prepara l'ambiente, installa, inizializza git, e verifica che tutto funzioni.
+Oppure a mano:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+python scripts/doctor.py     # dice cosa funziona e cosa manca
 pytest -q
 ```
+
+Il target è **WSL2 / Ubuntu** e non Windows: la motivazione è in
+`docs/architettura.md` §2.2 — in breve, OpenFOAM e CalculiX girano solo lì, e
+attraversare il confine a ogni valutazione costa tempo e rompe la
+riproducibilità binaria.
 
 ## Uso
 

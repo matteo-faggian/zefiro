@@ -163,6 +163,77 @@ non esercitato.
 
 ---
 
+## Fase 4bis — Design generativo  ⟵ **motore costruito, in attesa dei carichi veri**
+
+Quello costruito finora è design **parametrico**: 12 quote dentro una topologia
+decisa a mano. Il design **generativo** è un'altra cosa — la forma è il
+risultato, non l'ingresso. Sono tre problemi distinti, con matematiche diverse,
+e conflaterli è il modo più rapido di non risolverne nessuno.
+
+### (a) Ottimizzazione topologica della struttura ✅ **motore pronto**
+
+`src/zefiro/topopt/`. FEM Q4 piano e assialsimmetrico, filtri di densità,
+Heaviside, filtro di stampabilità SLM, SIMP, obiettivo di tensione con
+variabile aggiunta, Lagrangiano aumentato.
+
+Verificato dal basso: patch test a 3·10⁻¹⁶ · cilindro in pressione contro Lamé
+allo 0.002 % · adjoint del filtro di stampabilità a 3·10⁻¹⁰ · sensibilità di
+compliance e tensione contro differenze finite a 10⁻⁸ · trave MBB che riproduce
+il traliccio noto.
+
+**Due risultati emersi facendolo girare, entrambi non ovvi:**
+
+1. **Minimizzare la compliance è sbagliato con carico termico.** Il carico è la
+   dilatazione impedita, quindi è proporzionale al materiale: aggiungere
+   materia aggiunge rigidezza *e* carico, e la compliance sale. Misurato: la
+   sensibilità che ignora il termine `2 u' df/dx` sbaglia del 159 % e ha il
+   **segno invertito in 19 elementi su 80**. Un ottimizzatore guidato da quella
+   toglie materiale dove serve. Risolto passando a un obiettivo di tensione.
+2. **Il criterio di ottimalità (OC) diverge sulla tensione.** OC è derivato per
+   la compliance e presuppone sensibilità sempre negativa; sulla tensione cambia
+   segno. Forzandolo, la tensione di picco è salita a 1.4·10⁷ MPa. Risolto con
+   Lagrangiano aumentato + L-BFGS-B.
+
+**Che cosa manca perché produca nervature vere.** Con carico uniforme lungo
+l'asse la risposta ottima *è* spessore uniforme, e infatti esce quella — è
+fisica corretta, non un difetto. Le nervature nascono dove il carico è
+**disuniforme**: picchi locali di flusso termico, reazioni di flangia, la zona
+di gola. Quei carichi oggi sono una mia idealizzazione; devono venire dalla CFD
+(fase 3). **Il motore generativo è pronto e in attesa dei carichi veri.**
+
+*Criterio di chiusura:* la topologia ottimizzata gira sui carichi mappati dalla
+CFD, non su un gradiente lineare assunto, e il risultato passa i vincoli di
+processo SLM reali (TODO K).
+
+### (b) Forma libera del percorso fluido, accoppiata al mixing ❌ **bloccata dalla fase 3**
+
+È la critica giusta: oggi il mixing entra solo attraverso il rapporto delle
+quantità di moto `J`, che è un proxy 0D, e non è accoppiato con nulla di
+aerodinamico. Accoppiarli davvero vuol dire un'unica funzione obiettivo che
+vede insieme qualità di miscelazione e perdita di pressione totale, su un
+contorno **libero** (FFD o spline) invece che sul mio contorno di Angelino.
+
+Il metodo elegante sarebbe l'**aggiunto** del solutore reattivo. Non è
+praticabile: l'aggiunto disponibile in OpenFOAM è incomprimibile e non reattivo,
+e scriverne uno per un RANS reattivo comprimibile è un lavoro da tesi di
+dottorato, non da fine settimana.
+
+La strada praticabile, e che la tua macchina regge, è quella già prevista
+dall'architettura: **ottimizzazione su surrogato**. 20–40 variabili di forma
+FFD, DOE Latin Hypercube, Gaussian Process, e acquisizione multi-obiettivo che
+decide quali run CFD lanciare. Ore o giorni di calcolo, ma reale.
+
+*Prerequisito non aggirabile:* la CFD della fase 3. Ottimizzare la forma su una
+correlazione ±30 % significa ottimizzare il rumore.
+
+### (c) Topologia dell'iniezione ❌ **dopo la (b)**
+
+Numero, disposizione e forma degli elementi. È in parte discreto e non si tratta
+con SIMP; va con ottimizzazione mista intera sul surrogato, una volta che (b)
+sa misurare il mixing.
+
+---
+
 ## Fase 5 — Obiettivi, vincoli, ottimizzazione multi-obiettivo
 
 **Da fare**

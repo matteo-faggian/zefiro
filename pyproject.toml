@@ -14,6 +14,7 @@ dependencies = [
     "pyyaml>=6.0",
     "CoolProp>=6.4",
     "pyarrow>=14",
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,7 @@ l1  = ["gmsh>=4.11"]
 # pyarrow e' richiesto dal database dei campi di parete
 
 opt = ["pymoo>=0.6", "openmdao>=3.30", "botorch>=0.11"]
+# topopt usa solo numpy e scipy, gia' nelle dipendenze di base
 dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4", "httpx>=0.27"]
 
 [project.scripts]

@@ -33,6 +33,7 @@ parametri x → geometria CAD → mesh → CFD reattivo → FEM termo-struttural
 | Stime strutturali analitiche | implementato, testato |
 | Raffreddamento a liquido del banco | implementato, testato |
 | Interfaccia web locale (FastAPI + pagina statica) | implementato, testato |
+| Ottimizzazione topologica (design generativo strutturale) | implementato, verificato su casi analitici |
 | L1 (OpenFOAM / CalculiX) | stub con contratti fissati |
 | Ottimizzazione e surrogato | stub con contratti fissati |
 

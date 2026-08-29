@@ -1211,6 +1211,103 @@ risoluzione anche se l'utente chiede celle più grosse.
 Anche questo è stato trovato da un test, non previsto: il test che confronta
 l'area delle patch d'ingresso con πd²/4.
 
+## 8quinquies. Il motore da 50 N in geometria implicita
+
+### 8quinquies.1 Perché 50 N è un motore migliore di quello da 100 N
+
+Non è un ripiego di scala. A 50 N la portata d'aria si dimezza, quindi il
+serbatoio da 100 L eroga la raffica scaricandosi solo fino a **8 bar** invece
+che a 6. E a quel punto succede una cosa: il vincolo di Δp lato aria
+(p_c ≤ p_serbatoio/1.15) e quello lato GPL (p_c ≤ p_bombola/1.15) **si
+chiudono esattamente insieme**, perché entrambe le alimentazioni sono a 8 bar.
+
+| | 100 N | 50 N |
+|---|---|---|
+| p_c | 5.22 bar | **6.96 bar** |
+| ε | 1.45 | **1.71** |
+| Isp | 137 s | **146.5 s** |
+| durata | 5.0 s | 5.3 s |
+| massa | 105 g | 102 g |
+
+Nessun margine sprecato da nessuna delle due parti. Il bound su `p_c` è stato
+alzato da 6.0 a 7.0 bar di conseguenza: era tarato sull'impianto vecchio, ed
+è il caso da manuale del "parametro deciso al bordo del box" che il report di
+Pareto segnala.
+
+### 8quinquies.2 Dove va il calore, e perché cambia il progetto
+
+`scripts/heat_map_50N.py` calcola q lungo tutto il percorso del gas invece di
+assumerlo. Il risultato ribalta l'intuizione:
+
+| zona | q [MW/m²] | potenza | quota |
+|---|---|---|---|
+| camera | 0.99 | 2.29 kW | **62 %** |
+| convergente | 0.99 → 4.65 | 1.02 kW | 28 % |
+| plug | 2.57 → 4.65 | 0.37 kW | 10 % |
+
+**Il calore non è concentrato in gola.** La camera ne prende quasi due terzi
+perché ha l'area; il plug, che è dove il flusso specifico è massimo, ne prende
+un decimo. I canali servono soprattutto in camera. Totale 3.69 kW, cioè
+1.8 l/min d'acqua per 30 K di salto: una frazione di quello che dà una canna.
+
+Il transitorio a 5 s, spazzato su **tutto** l'intervallo plausibile delle
+proprietà del 316L SLM (TODO 6 ancora aperto — ρ 7700-8000, cp 450-550,
+k 10-20), dice che senza acqua non sopravvive niente: la camera arriva a
+1228-1389 K e il labbro fonde. La conclusione non dipende dai numeri incerti.
+
+### 8quinquies.3 Perché due circuiti, e perché a U
+
+Un circuito **unico** non funziona: serve h alto solo al labbro, ma la
+velocità che lo produce va pagata in perdita di carico su tutta la lunghezza —
+2.5 bar su una rete che ne dà 4, con 14 K di margine all'ebollizione. Due
+circuiti in **parallelo** da un collettore comune scendono a 0.77 bar, perché
+il ramo veloce è anche quello corto. È questo che produce i collettori: non
+sono decorazione, sono la conseguenza di due zone con richieste opposte
+alimentate dalla stessa acqua.
+
+Il ramo della gola è poi a **U** — scende al labbro, gira, e torna su uno
+strato più esterno — per una ragione geometrica trovata misurando: verso il
+labbro la parete è conica, e nell'ingombro assiale di un attacco radiale il
+raggio cambia di 2 mm. **Non esiste nessuna profondità di foro che insieme
+raggiunga il collettore e non buchi la parete.** L'attacco arrivava a 0.18 mm
+dal gas e in parte lo bucava. Con la U entrambi gli attacchi tornano sulla
+parte cilindrica e il problema sparisce.
+
+### 8quinquies.4 Cinque difetti che i volumi non vedevano
+
+La geometria implicita è potente e silenziosa: un campo sbagliato produce un
+solido plausibile. Tutti e cinque i difetti incontrati davano volumi
+ragionevoli, e nessuno si vedeva da fuori.
+
+| difetto | come si è visto |
+|---|---|
+| canali scavati **dentro il corpo centrale** — `\|G − p\| ≤ h/2` vale su entrambi i lati della parete, un campo di distanza non ha un verso | sezione meridiana |
+| il guscio della cavità gassosa avvolge **tutto** il contorno, quindi anche l'interno del plug | sezione meridiana |
+| il collettore a x = 0 sconfinava nella piastra e ne staccava un disco | **componenti connesse** (2 invece di 1) |
+| i due circuiti si accavallavano e lasciavano pareti più sottili della griglia | **spigoli con un solo triangolo** (56) |
+| l'attacco d'uscita del ramo gola **bucava la parete** | controllo canali-contro-gas, dopo averlo esteso agli attacchi |
+
+L'ultimo merita una nota: il controllo esisteva già, ma guardava solo i
+*canali* e non gli *attacchi*. Un controllo con un buco è peggio di nessun
+controllo, perché dà fiducia. I fori d'iniezione restano fuori dal controllo
+di tenuta — devono aprirsi in camera, è la loro funzione — e vivono in un
+campo separato per non confonderli.
+
+### 8quinquies.5 Che cosa non c'è ancora
+
+* **Il plug non è raffreddato.** Prende 0.37 kW, e il transitorio a 4 mm di
+  spessore dà 1212-1379 K: sotto la fusione ma oltre qualunque resistenza
+  utile. Serve un passaggio d'acqua nel corpo centrale.
+* **Nessuna verifica strutturale** del mantello forato: `topopt` è pronto ma
+  aspetta i carichi non uniformi dalla CFD (fase 3).
+* **Il percorso CUDA è scritto ma non eseguito**: l'ambiente di sviluppo non
+  ha GPU. Chi ha la 5070 Ti deve far girare `tests/test_sdf.py` con
+  `ZEFIRO_SDF_BACKEND=cupy` prima di fidarsi.
+* Le proprietà del 316L SLM restano il **TODO 6**, e il minimo di
+  fabbricabilità il **TODO 7**: con canali da 0.6 mm e setti da 0.4 mm il
+  pezzo è al limite di ciò che l'SLM tiene, e quel limite non è ancora un
+  numero misurato.
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |

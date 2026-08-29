@@ -26,7 +26,13 @@ from zefiro.units import DEG, R_UNIVERSAL
 #: Bounds dei 12 parametri liberi. Unita' SI. Vedi docs/architettura.md 4.1
 #: per la motivazione di ciascuno.
 DESIGN_BOUNDS: dict[str, tuple[float, float]] = {
-    "p_c":             (3.0e5, 6.0e5),      # Pa
+    # Il tetto NON e' un numero tondo: e' il minimo fra i due limiti di
+    # alimentazione, p_serbatoio/1.15 e p_bombola/1.15. Con il serbatoio
+    # scaricato fino a 8 bar e la bombola a 8 bar i due coincidono a 6.96 bar,
+    # e il bound e' messo appena sopra per non tagliare l'ottimo. Era 6.0e5
+    # quando il serbatoio si scaricava fino a 6 bar: il bound seguiva
+    # l'impianto, e l'impianto e' cambiato.
+    "p_c":             (3.0e5, 7.0e5),      # Pa
     "phi_core":        (0.70, 1.15),        # -
     "f_film":          (0.00, 0.35),        # -
     "Dc_over_Dt":      (2.00, 5.00),        # -

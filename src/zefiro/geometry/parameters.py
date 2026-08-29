@@ -149,6 +149,16 @@ def derive(
     R_film = R_c - d_film
     film_land = 0.5 * d_film
 
+    # Setto fra fori d'iniezione ADIACENTI, sull'arco del settore a R_inj.
+    # Non e' la stessa cosa del diametro minimo: due fori possono essere
+    # entrambi fabbricabili e non starci comunque uno accanto all'altro.
+    # Trovato dal generatore di mesh su un punto del fronte di Pareto: 18 fori
+    # d'aria da 2.62 mm su un arco di 4.11 mm lasciavano 0.23 mm di materiale.
+    R_inj = 0.5 * (r_cb + R_c)
+    arco_settore = R_inj * 2.0 * math.pi / N
+    diametri = [d_ox, d_f] + ([d_film] if d_film > 0.0 else [])
+    injector_land = (arco_settore - sum(diametri)) / (len(diametri) + 1)
+
     # Volume del pezzo, ESATTO: e' la rivoluzione del poligono meridiano, e
     # quel volume ha forma chiusa (geometry/profile.py). Non e' una stima di
     # parete sottile - quella sbagliava del 7 % perche' contava due volte il
@@ -169,7 +179,8 @@ def derive(
         "V_c": V_c, "L_star": L_star,
         "N_inj": float(N), "sector_angle": 2.0 * math.pi / N,
         "d_ox": d_ox, "d_fuel": d_f, "A_ox_tot": A_ox_tot, "A_fuel_tot": A_f_tot,
-        "R_inj": 0.5 * (r_cb + R_c),
+        "R_inj": R_inj, "injector_land": injector_land,
+        "injector_pitch_arc": arco_settore,
         "u_ox": u_ox, "u_fuel": u_fuel, "rho_air_inj": rho_air, "rho_fuel_inj": rho_fuel,
         "momentum_flux_ratio_J": J,
         "rho_chamber": rho_c, "u_chamber": u_chamber,

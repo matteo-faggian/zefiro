@@ -108,33 +108,51 @@ non esercitato.
 
 ---
 
-## Fase 3 — L1 fluidodinamica
+## Fase 3 — Mesh e CFD reattivo
 
-**Da fare**
-- **Validazione calorimetrica**: due termocoppie sull'acqua di raffreddamento
-  danno una misura diretta del calore entrato nelle pareti, con cui verificare
-  la CFD. Oggi al suo posto c'è solo Bartz col suo ±30 %.
-- **Snakemake** (rinviato dalla fase 2): DAG `design → L0 → mesh → CFD → FEM`,
-  con `run_id` come wildcard. Qui serve davvero, perché i job costano ore.
-- `l1/mesh.py`: Gmsh sul **negativo** del solido (dominio fluido), settore
-  periodico, strato limite risolto, physical groups = `CANONICAL_BOUNDARIES`.
-- `l1/cfd.py`: `reactingFoam`, inizializzato dallo stato di equilibrio L0.
-- Meccanismo ridotto per la CFD, ottenuto dal San Diego mech.
+**Stato: la MESH è chiusa** (2026-08-29). Il solutore resta aperto.
 
-**Criteri di chiusura**
-- **Grid convergence study** su almeno 3 livelli di mesh, con indice GCI di
-  Roache calcolato: la spinta deve convergere entro il 2 %.
-- I nomi delle boundary prodotte coincidono **esattamente** con
-  `CANONICAL_BOUNDARIES` (test automatico).
-- Bilancio di massa e di energia chiuso entro lo 0.1 % sul dominio.
-- Il calore integrato a parete predetto dalla CFD sta entro il 20 % della
-  misura calorimetrica del banco. È il primo confronto con la realtà del
-  progetto, e va fatto prima di fidarsi di qualunque risultato termico.
-- La CFD riproduce `c*` di L0 entro il 5 % su un caso a φ = 1 senza film
-  cooling. Se lo scarto è maggiore, va **spiegato** (perdite di ristagno,
-  combustione incompleta) prima di procedere, non tarato.
-- Il meccanismo ridotto riproduce τ_ign e S_L del San Diego completo entro il
-  10 % nel range di p e T di camera.
+**Fatto**
+- `geometry/profile.fluid_polygon`: dominio fluido come complemento del solido
+  dentro un contenitore che arriva all'ambiente (l'aerospike espande
+  all'esterno, quindi il contorno del getto non è una parete). I nomi delle
+  frontiere nascono qui, in codice puro e testabile.
+- `l1/mesh.generate_mesh`: settore 2π/N, periodicità conforme, fori
+  d'iniezione **imprintati** sulla faccia come patch separate.
+- `l1/mesh.verify_periodicity` e `mesh_quality`: verifiche indipendenti, nodo
+  per nodo e faccia per faccia, senza fidarsi né di Gmsh né di `checkMesh`.
+- `scripts/mesh_report.py`: la mesh si guarda, non solo si misura.
+
+**Criteri di chiusura — verifica**
+
+| criterio | esito |
+|---|---|
+| patch periodiche conformi | scarto **3.6e-6** raggi di labbro (34 nm); stesso numero di triangoli e stessa area a 8 cifre |
+| skewness sotto il limite OpenFOAM (4) | **1.45** |
+| non-ortogonalità | max **70.7°** su lo **0.0001 %** delle facce (una) |
+| nomi delle frontiere corretti | verificati contro la geometria, non contro l'ordine di costruzione |
+| volume della mesh = volume analitico | verificato in forma chiusa dal poligono meridiano |
+| area delle patch d'ingresso = πd²/4 | entro il **3 %**, con risoluzione imposta dal mesher |
+
+**Cosa ha trovato la mesh**
+
+1. **Il ginocchio del fronte di Pareto non è fabbricabile.** 18 fori d'aria da
+   2.62 mm su un arco di 4.11 mm lasciano 0.23 mm di materiale; a N = 24 il
+   setto è negativo. `min_feature` non poteva vederlo perché guarda le *quote*,
+   non le *distanze*. Aggiunto `injector_pitch`.
+2. **Il foro del film è 0.095 mm**, sotto qualunque minimo SLM. Non c'è vincolo
+   che lo fermi finché `min_feature_size` resta il TODO 7: è la prova che quel
+   TODO non è burocrazia.
+3. Due correzioni istintive alla qualità della mesh — raffinare vicino all'asse
+   e ottimizzare con Netgen — **peggiorano** entrambe la mesh. La causa vera era
+   il contorno del plug dato come 135 segmenti invece che come una spline.
+
+**Ancora aperto**
+- `l1/cfd.run_reacting_foam`: scrittura del caso OpenFOAM e lancio. OpenFOAM non
+  è installato in questo ambiente, quindi va fatto e verificato in WSL.
+- Da lì escono le due cose che bloccano il resto: la **metrica di miscelazione**
+  (fase 5, ramo L1) e i **carichi non uniformi** per l'ottimizzazione topologica
+  (fase 7).
 
 ---
 

@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-SCHEMA_VERSION = "zefiro-schema-0.2.0"
+SCHEMA_VERSION = "zefiro-schema-0.3.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -218,9 +218,20 @@ class L0Result(_Serializable):
 # --------------------------------------------------------------------------- #
 CANONICAL_BOUNDARIES: tuple[str, ...] = (
     "inlet_air", "inlet_fuel_core", "inlet_fuel_film",
+    "wall_faceplate",
     "wall_chamber", "wall_convergent", "wall_throat", "wall_plug", "wall_cowl",
     "outlet_far", "axis", "periodic_a", "periodic_b",
 )
+# `wall_faceplate` e' la piastra d'iniezione al netto dei fori. Mancava nella
+# prima stesura, ed era una svista con conseguenze: e' la parete su cui si e'
+# scoperto che il film cooling in testa protegge una zona che non ne ha bisogno
+# (docs/architettura.md 8.5). Una parete senza nome e' una parete di cui non si
+# guarda il carico termico.
+#
+# `wall_throat` e `wall_cowl` restano nel registro ma NON sono prodotte da un
+# aerospike a espansione esterna con labbro di spessore nullo: li' la gola e'
+# delimitata dal plug e da uno spigolo, non da due superfici. Il registro
+# elenca i nomi ammessi, non quelli obbligatori: vedi l1.mesh.REQUIRED_BOUNDARIES.
 
 
 @dataclass(frozen=True)
@@ -234,6 +245,16 @@ class MeshArtifact(_Serializable):
     max_non_orthogonality: float
     max_skewness: float
     sha256: str
+    #: Frazione di facce interne oltre i 70 gradi di non-ortogonalita'.
+    #: Il MASSIMO da solo e' un pessimo riassunto di 47000 facce: puo' essere
+    #: alto per una scheggia sola in un angolo che non interessa. La frazione
+    #: dice se il problema e' locale o diffuso, e sono due situazioni diverse.
+    frac_non_orthogonal: float = 0.0
+    #: Scarto massimo fra le due facce periodiche dopo la rotazione, in
+    #: multipli del raggio del labbro. Registrato e non solo confrontato con
+    #: una soglia: un numero si puo' rivedere, un booleano no.
+    periodic_mismatch: float = 0.0
+    warnings: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 

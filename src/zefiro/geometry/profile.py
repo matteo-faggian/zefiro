@@ -130,3 +130,137 @@ def wetted_area_from_contour(
              for i in range(len(contour_x) - 1)]
     return sum(math.pi * (r0 + r1) * math.hypot(x1 - x0, r1 - r0)
                for x0, r0, x1, r1 in segs)
+
+
+#: Estensione del campo lontano, in multipli del RAGGIO DEL LABBRO.
+#:
+#: Il labbro e non la lunghezza del motore: la camera sta a monte e non ha
+#: nulla a che vedere con quanto deve essere grande la regione di scarico.
+#: La scala del getto e' il raggio di uscita, quindi e' quella che comanda.
+#:
+#: NON sono valori da manuale. Sono un punto di partenza dichiarato, e
+#: l'indipendenza del risultato da questi due numeri va VERIFICATA con uno
+#: studio: si allarga il dominio e si guarda se la spinta e la pressione di
+#: base cambiano. Finche' quello studio non c'e', ogni risultato CFD porta
+#: questa incertezza, e va detto invece che dimenticato.
+FARFIELD_RADIAL_FACTOR = 8.0
+FARFIELD_AXIAL_FACTOR = 10.0
+
+
+def fluid_polygon(
+    derived: Mapping[str, float],
+    contour_x: Sequence[float],
+    contour_r: Sequence[float],
+    radial_factor: float = FARFIELD_RADIAL_FACTOR,
+    axial_factor: float = FARFIELD_AXIAL_FACTOR,
+) -> tuple[list[tuple[float, float]], list[str], list[tuple[int, int]]]:
+    """Poligono meridiano del DOMINIO FLUIDO: punti, nome di ogni lato, e
+    quali tratti sono CURVE LISCE invece che spezzate.
+
+    Non e' il solido: e' il suo complemento dentro un contenitore che include
+    la regione di scarico. L'aerospike espande all'ESTERNO, quindi il contorno
+    del getto non e' una parete e il dominio deve arrivare fino all'ambiente.
+
+    Ritorna `(punti, nomi, curve)`. `len(nomi) == len(punti)`: il lato `i` va
+    dal vertice `i` al vertice `(i+1) % n` e si chiama `nomi[i]`. Il poligono e'
+    chiuso implicitamente.
+
+    `curve` elenca gli intervalli di vertici `[i, j]` che vanno costruiti come
+    UNA spline e non come una spezzata. **Non e' cosmesi geometrica, e' la
+    differenza fra una mesh utilizzabile e una da buttare.** Il contorno del
+    plug arriva da `plug_contour` come ~140 punti su una decina di millimetri:
+    se lo si da' a Gmsh come 140 segmenti, ogni vertice diventa un nodo
+    obbligato e forza celle da 0.07 mm accanto a celle da 0.8 mm. Il risultato
+    misurato erano schegge con non-ortogonalita' di 89 gradi, che OpenFOAM
+    rifiuta. Come spline unica, Gmsh e' libero di scegliere i nodi secondo il
+    campo di dimensione.
+
+    Solo il plug e' liscio: gli altri tratti hanno spigoli VERI (la faccia di
+    base, il labbro, gli angoli del campo lontano) e una spline li
+    arrotonderebbe, cambiando la geometria invece che descriverla meglio.
+
+    **Perche' i nomi si assegnano qui.** Dopo la rivoluzione si potrebbe
+    riconoscere ogni superficie dalla posizione del suo baricentro, ed e' il
+    modo in cui si fa di solito. E' anche il modo in cui si sbaglia: una
+    condizione al contorno applicata alla faccia sbagliata non fa fallire
+    niente e non si vede da nessuna parte, produce solo un risultato falso.
+    Qui i nomi nascono in codice puro, senza gmsh, dove un test li puo'
+    verificare uno per uno contro la geometria.
+
+    **Frontiere canoniche assenti, e perche'.** `wall_throat` e `wall_cowl` non
+    vengono prodotte: su un aerospike a espansione esterna con labbro di
+    spessore nullo la gola e' delimitata dal plug (dentro) e dal solo SPIGOLO
+    del labbro (fuori), che non e' una superficie. Inventarle come patch vuote
+    darebbe a valle l'impressione di aver imposto una condizione che non
+    esiste. Il flusso termico in gola si estrae dalla coordinata x su
+    `wall_plug`: le patch servono alle condizioni al contorno, non al
+    post-processing.
+    """
+    R_c = derived["R_c"]
+    R_lip = derived["R_lip"]
+    L_c = derived["L_c"]
+    L_conv = derived["L_conv"]
+    r_cb = derived["r_centerbody"]
+    x_lip = L_c + L_conv
+
+    x_throat = x_lip + contour_x[0]
+    if x_throat <= 0.0:
+        raise ValueError(
+            "La gola cade a monte della faccia di iniezione: camera troppo corta."
+        )
+    x_base = x_lip + contour_x[-1]
+    r_base = contour_r[-1]
+    troncato = r_base > 1.0e-9
+
+    R_far = radial_factor * R_lip
+    # a valle: il piu' grande fra "tante volte il raggio di uscita" e "il
+    # doppio del plug", cosi' un plug lungo non si ritrova il fondo addosso
+    x_far = x_base + max(axial_factor * R_lip, 2.0 * (x_base - x_throat))
+    if R_far <= R_c:
+        raise ValueError(
+            f"campo lontano R = {R_far*1e3:.1f} mm dentro la camera "
+            f"(R_c = {R_c*1e3:.1f} mm): alza radial_factor"
+        )
+
+    pts: list[tuple[float, float]] = []
+    nomi: list[str] = []
+    curve: list[tuple[int, int]] = []
+
+    def lato(punto: tuple[float, float], nome: str) -> None:
+        """Aggiunge il vertice `punto` e dichiara che il lato che ne PARTE si
+        chiama `nome`."""
+        pts.append(punto)
+        nomi.append(nome)
+
+    lato((0.0, r_cb), "wall_faceplate")          # faccia anulare d'iniezione
+    lato((0.0, R_c), "wall_chamber")
+    lato((L_c, R_c), "wall_convergent")
+    lato((x_lip, R_lip), "outlet_far")           # dal labbro verso l'ambiente
+    lato((x_lip, R_far), "outlet_far")           # cilindro esterno
+    lato((x_far, R_far), "outlet_far")           # sezione di uscita
+    lato((x_far, 0.0), "axis")
+    if troncato:
+        lato((x_base, 0.0), "wall_plug")         # faccia di base, spigolo VERO
+        inizio_curva = len(pts)
+        lato((x_base, r_base), "wall_plug")
+    else:
+        inizio_curva = len(pts)
+        lato((x_base, 0.0), "wall_plug")
+    # contorno del plug a ritroso, dalla base verso la gola: e' liscio
+    for i in range(len(contour_x) - 2, 0, -1):
+        lato((x_lip + contour_x[i], contour_r[i]), "wall_plug")
+    # il vertice di gola chiude la curva; il lato che ne parte e' il corpo
+    # centrale, retto, che chiude il poligono tornando al primo vertice
+    lato((x_throat, contour_r[0]), "wall_plug")
+    curve.append((inizio_curva, len(pts) - 1))
+
+    if len(pts) != len(nomi):                    # pragma: no cover - invariante
+        raise AssertionError("un lato per vertice: invariante rotta")
+    for i, j in curve:
+        if not (0 <= i < j < len(pts)):          # pragma: no cover - invariante
+            raise AssertionError(f"intervallo di curva assurdo: ({i}, {j})")
+        if len(set(nomi[i:j])) != 1:             # pragma: no cover - invariante
+            raise AssertionError(
+                f"la curva ({i}, {j}) attraversa piu' frontiere: {set(nomi[i:j])}"
+            )
+    return pts, nomi, curve

@@ -49,6 +49,7 @@ CONSTRAINT_NAMES: tuple[str, ...] = (
     "ox_supply_pressure",    # p_c + Dp_aria sotto la pressione di serbatoio
     "air_supply",            # la portata richiesta deve essere disponibile
     "min_feature",           # quote minime fabbricabili in SLM
+    "injector_pitch",        # setto di materiale fra fori adiacenti
     "watertight",            # la geometria deve essere un solido chiuso
     "throat_heat_flux",      # q di gola entro cio' che il raffreddamento estrae
     "combustion_residence",  # Damkohler minimo: la camera deve bruciare
@@ -77,6 +78,20 @@ MIN_INJECTOR_DP_FRACTION = 0.15
 #: p_c <= p_aria / 1.15 = 5.22 bar, che e' esattamente il valore ricavato a mano
 #: in config/design_default.yaml: due strade indipendenti allo stesso numero.
 MIN_OX_INJECTOR_DP_FRACTION = 0.15
+
+#: Setto minimo fra due fori d'iniezione adiacenti, in frazione del diametro
+#: maggiore fra i due.
+#:
+#: PERCHE' ESISTE. Come `ox_dp_stability`, e' un vincolo che mancava e che e'
+#: stato trovato a valle: il generatore di mesh non e' riuscito a imprimere i
+#: fori sul punto di ginocchio del fronte, perche' 18 fori d'aria da 2.62 mm su
+#: un arco di 4.11 mm lasciavano 0.23 mm di materiale fra l'uno e l'altro.
+#:
+#: Il vincolo `min_feature` non poteva vederlo: guarda le QUOTE (diametri,
+#: spessori), non le DISTANZE. Due fori possono essere entrambi perfettamente
+#: fabbricabili e non starci comunque affiancati. E' lo stesso ragionamento di
+#: `film_land`, applicato dove mancava.
+MIN_INJECTOR_LAND_FRACTION = 0.25
 
 #: Damkohler minimo ammesso, Da = tau_residenza / tau_blowout.
 #:
@@ -179,6 +194,14 @@ def objectives_l0(
         # distinguere sarebbe irreparabile.
         f["wall_volume"] = l0.wall_volume
         source["wall_volume"] = "geometry.profile/esatto"
+
+    land = d.get("injector_land")
+    if land is not None:
+        diametri = [d[k] for k in ("d_ox", "d_fuel", "d_film") if d.get(k, 0.0) > 0.0]
+        if diametri:
+            richiesto = MIN_INJECTOR_LAND_FRACTION * max(diametri)
+            g["injector_pitch"] = (richiesto - land) / richiesto
+            source["injector_pitch"] = "geometry.parameters"
 
     if min_feature_size is not None and d:
         quote = [d[k] for k in ("d_ox", "d_fuel", "d_film", "film_land", "t_wall")

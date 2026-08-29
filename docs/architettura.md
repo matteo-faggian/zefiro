@@ -1104,10 +1104,118 @@ Conseguenza pratica: 50 000 valutazioni costano ~30 s sui 23 processi della
 macchina. Il budget non è più il vincolo, quindi **si ripete con più semi**
 invece di fidarsi di uno.
 
+## 8quater. La mesh del settore periodico (fase 3)
+
+### 8quater.1 Perché questa è la strozzatura
+
+A L0 il tempo chimico di blowout è **30–100 µs** (§8ter.3), ordini di grandezza
+sotto qualunque tempo di miscelazione reale. Ne segue che **Zefiro è limitato
+dalla miscelazione, non dalla chimica** — e la miscelazione è esattamente la
+cosa che L0 non può vedere, perché L0 non ha una geometria di iniezione, ha un
+rapporto di equivalenza.
+
+La stessa mesh serve anche all'altra cosa che manca: i **carichi non uniformi**
+per l'ottimizzazione topologica. Carichi uniformi danno rinforzi uniformi, cioè
+nessuna informazione. Le due esigenze hanno la stessa strozzatura, ed è questa.
+
+### 8quater.2 Tre cose delicate, e come sono verificate
+
+**1. La periodicità dev'essere conforme.** La condizione `cyclic` di OpenFOAM
+accoppia le facce a coppie; se le due facce del settore non hanno la stessa
+mesh, l'accoppiamento è interpolato, e su un flusso reagente supersonico
+interpolare a cavallo del piano periodico introduce una sorgente numerica di
+massa. Si usa `setPeriodic`, ma **non ci si fida**: l'API accetta volentieri una
+matrice affine sbagliata senza protestare, e il difetto si manifesta solo dentro
+il solutore, dove è difficilissimo da attribuire. `verify_periodicity` controlla
+nodo per nodo dopo la rotazione. Misurato: scarto massimo **3.6e-6** volte il
+raggio del labbro, cioè 34 nanometri — e le due patch escono con lo **stesso
+numero di triangoli e la stessa area a otto cifre**, che è una conferma
+indipendente.
+
+**2. I nomi delle frontiere.** Nascono in `geometry/profile.fluid_polygon`, in
+codice puro senza Gmsh, dove un test li verifica uno per uno contro la
+geometria. Poi vengono propagati alle superfici di rivoluzione **per topologia**:
+ogni superficie laterale ha fra le sue curve di bordo esattamente il lato
+meridiano che l'ha generata. Non per ordine, e non per posizione del baricentro.
+
+Il motivo è che l'ordine **non regge**: il tratto sull'asse (r = 0 a entrambi
+gli estremi) ruotando non genera nessuna superficie, e l'ordine scala di uno
+senza avvisare. Sarebbe ogni condizione al contorno spostata di una faccia.
+Silenzioso, e fatale.
+
+**3. Gli iniettori sono imprintati, non estrusi.** I fori si tagliano sulla
+faccia d'iniezione come patch separate, senza modellare il condotto a monte: a
+monte del foro la condizione è comunque una portata imposta, quindi il condotto
+aggiungerebbe celle senza aggiungere fisica. Ciò che conta — il getto discreto e
+la sua penetrazione nella corrente d'aria — resta risolto.
+
+### 8quater.3 Due tentativi falliti, tenuti agli atti
+
+Le prime mesh avevano non-ortogonalità di **89 gradi** e skewness **4.8**:
+inaccettabili (il limite OpenFOAM sulla skewness è 4). La causa non era ovvia e
+le due correzioni istintive hanno entrambe **peggiorato** le cose:
+
+| tentativo | esito misurato |
+|---|---|
+| raffinare vicino all'asse, dove l'arco del settore è più stretto della cella | non-ortogonalità invariata, skewness da 1.43 a **2.24** |
+| ottimizzatore Netgen, lo strumento previsto per le schegge | skewness da 1.43 a **2.15** |
+
+La causa vera era altrove: **il contorno del plug arrivava a Gmsh come ~135
+segmenti rettilinei** su una decina di millimetri. Ogni vertice è un nodo
+obbligato, quindi Gmsh era costretto a mettere celle da 0.07 mm accanto a celle
+da 0.8 mm. Come **spline unica** il problema sparisce: skewness da 4.8 a **1.43**.
+
+Solo il plug diventa spline: gli altri tratti hanno spigoli veri (la faccia di
+base, il labbro, gli angoli del campo lontano) e una spline li arrotonderebbe,
+cioè cambierebbe la geometria invece di descriverla meglio.
+
+Sul punto di prova, mesh finale: **non-ortogonalità massima 77 gradi su lo
+0.002 % delle facce, skewness 1.52, periodicità esatta.** La non-ortogonalità
+sopra 70 gradi è un avviso e non un errore — OpenFOAM la corregge con i
+`nNonOrthogonalCorrectors` — ed è per questo che `MeshArtifact` registra la
+**frazione** e non solo il massimo: un massimo su 47 000 facce non dice se il
+problema è una scheggia in un angolo o è diffuso, e sono due situazioni diverse.
+
+### 8quater.4 Il secondo vincolo mancante, trovato dalla mesh
+
+Il generatore di mesh **non è riuscito** a imprimere i fori sul punto di
+ginocchio del fronte di Pareto: 18 fori d'aria da 2.62 mm su un arco di 4.11 mm
+a R_inj lasciavano **0.23 mm** di materiale fra l'uno e l'altro. A N = 24 il
+setto diventa **negativo**: i fori si compenetrano.
+
+Il vincolo `min_feature` non poteva vederlo, perché guarda le **quote**
+(diametri, spessori) e non le **distanze**. Due fori possono essere entrambi
+perfettamente fabbricabili e non starci comunque affiancati.
+
+È lo stesso ragionamento di `film_land`, applicato dove mancava. Aggiunto
+`injector_pitch` con `MIN_INJECTOR_LAND_FRACTION = 0.25`, e `injector_land` fra
+le quote derivate.
+
+**È il secondo vincolo mancante trovato da un modello più profondo di quello che
+lo aveva prodotto** — dopo `ox_dp_stability`, che era stato trovato
+dall'ottimizzatore stesso (§8ter e ROADMAP fase 5). Il primo l'ha trovato
+l'ottimizzazione sfruttando una scappatoia; il secondo l'ha trovato la geometria
+rifiutandosi di esistere. In entrambi i casi il modello di livello superiore
+aveva approvato un motore che non si può costruire.
+
+### 8quater.5 Risoluzione dei fori: perché 16 segmenti
+
+Un cerchio meshato con *n* segmenti diventa un poligono inscritto, la cui area
+vale `(n / 2π) sin(2π/n)` volte quella del cerchio: con 7 segmenti **manca il
+13 %**. E l'area del foro non è un dettaglio estetico — a portata imposta è ciò
+che fissa la **velocità di iniezione**, quindi il rapporto delle quantità di
+moto, quindi la miscelazione: precisamente la grandezza per cui questa mesh
+esiste. Con 16 segmenti l'errore scende all'1.3 %, e il mesher **impone** quella
+risoluzione anche se l'utente chiede celle più grosse.
+
+Anche questo è stato trovato da un test, non previsto: il test che confronta
+l'area delle patch d'ingresso con πd²/4.
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |
 |---|---|---|
 | `zefiro-schema-0.1.0` | 2026-08-26 | Prima definizione. |
 | — | 2026-08-26 | Aggiunto `zefiro.feed` (impianto di alimentazione). Nessun contratto scambiato modificato, quindi `SCHEMA_VERSION` invariata. |
+| `zefiro-schema-0.3.0` | 2026-08-29 | Fase 3 (mesh). `CANONICAL_BOUNDARIES` guadagna `wall_faceplate`: la piastra d'iniezione al netto dei fori era una parete senza nome, cioè una parete di cui nessuno guardava il carico termico — ed è la stessa su cui si era scoperto che il film cooling in testa protegge una zona che non ne ha bisogno (§8.5). `MeshArtifact` guadagna `frac_non_orthogonal`, `periodic_mismatch` e `warnings`. Nuovo vincolo `injector_pitch` e nuova quota derivata `injector_land`. |
 | `zefiro-schema-0.2.0` | 2026-08-29 | Fase 5. `L0Result` guadagna `q_throat`, `T_wall_adiabatic`, `wall_volume`. Il registro obiettivi passa da 3 a 6 nomi e quello dei vincoli da 8 a 10 (`throat_heat_flux`, `combustion_residence`). Poiché i registri **definiscono le colonne** del database, `RunStore.migrate()` allinea i file esistenti con `ALTER TABLE`: si aggiungono colonne, mai se ne tolgono, e i campi nuovi sulle righe vecchie restano `NULL` — che è l'unica risposta onesta («quella run non l'ha misurato»), diversa da zero che significherebbe «misurato, vale zero». Un database con colonne che il codice non conosce viene **rifiutato**: è stato scritto da una versione più recente. |

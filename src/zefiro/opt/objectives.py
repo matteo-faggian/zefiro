@@ -27,16 +27,31 @@ from zefiro.schemas import (
 )
 
 #: Registro degli obiettivi. Ordine stabile: e' l'ordine delle colonne.
-OBJECTIVE_NAMES: tuple[str, ...] = ("neg_thrust", "neg_isp_total", "wall_volume")
+#:
+#: Sono le metriche CALCOLATE e archiviate a ogni run. Quali di queste vengano
+#: effettivamente messe in un fronte di Pareto e' una scelta separata, che vive
+#: nel driver (`opt.driver.OBJECTIVE_SETS`) e non qui: archiviare e' gratis,
+#: ottimizzare no.
+OBJECTIVE_NAMES: tuple[str, ...] = (
+    "neg_thrust",       # -F            [N]      spinta
+    "neg_isp_total",    # -Isp          [s]      impulso specifico sul totale
+    "neg_isp_fuel",     # -Isp_fuel     [s]      spinta per kg di GPL
+    "q_throat",         #  q            [W/m^2]  severita' termica in gola
+    "wall_volume",      #  V            [m^3]    proxy di massa (Pappo-Guldino)
+    "neg_damkohler",    # -Da           [-]      completezza della combustione
+)
 
 #: Registro dei vincoli. `g <= 0` fattibile.
 CONSTRAINT_NAMES: tuple[str, ...] = (
     "fuel_dp_stability",     # il Dp iniettore GPL deve essere >= 15 % di p_c
     "fuel_supply_pressure",  # p_c + Dp_GPL deve stare sotto la pressione di bombola
-    "ox_supply_pressure",    # idem lato aria
+    "ox_dp_stability",       # idem, lato ARIA: e' il 94 % della portata
+    "ox_supply_pressure",    # p_c + Dp_aria sotto la pressione di serbatoio
     "air_supply",            # la portata richiesta deve essere disponibile
     "min_feature",           # quote minime fabbricabili in SLM
     "watertight",            # la geometria deve essere un solido chiuso
+    "throat_heat_flux",      # q di gola entro cio' che il raffreddamento estrae
+    "combustion_residence",  # Damkohler minimo: la camera deve bruciare
     "margin_yield",          # (solo L1) margine strutturale
     "margin_temp",           # (solo L1) margine termico
 )
@@ -45,6 +60,37 @@ CONSTRAINT_NAMES: tuple[str, ...] = (
 #: Sotto questa soglia l'iniezione si accoppia con l'acustica di camera. E' una
 #: SCELTA di progetto, dichiarata qui e non sepolta in una formula.
 MIN_INJECTOR_DP_FRACTION = 0.15
+
+#: Lo stesso, lato ARIA. Costante separata perche' le due soglie sono scelte
+#: indipendenti, anche se oggi coincidono.
+#:
+#: PERCHE' ESISTE. Nella prima versione questo vincolo NON c'era, e la prima
+#: run di NSGA-II lo ha scoperto e sfruttato: ha portato `d_ox_ratio` al
+#: massimo del box (fori d'aria larghissimi -> velocita' bassa -> Dp d'aria
+#: quasi nullo) per potersi permettere p_c = 5.94 bar contro i 6.0 bar di
+#: serbatoio. Sulla carta piu' spinta; in giardino un motore in cui la pressione
+#: di camera comanda la portata d'aria invece del contrario, cioe' il classico
+#: accoppiamento fra camera e alimentazione.
+#:
+#: L'aria e' il 94 % della portata: qui il disaccoppiamento conta PIU' che sul
+#: combustibile, non meno. Con questo vincolo attivo il massimo ammesso diventa
+#: p_c <= p_aria / 1.15 = 5.22 bar, che e' esattamente il valore ricavato a mano
+#: in config/design_default.yaml: due strade indipendenti allo stesso numero.
+MIN_OX_INJECTOR_DP_FRACTION = 0.15
+
+#: Damkohler minimo ammesso, Da = tau_residenza / tau_blowout.
+#:
+#: Non e' una preferenza di progetto: e' il CONFINE DI VALIDITA' del modello L0.
+#: Tutta la prestazione L0 poggia sull'ipotesi di equilibrio chimico raggiunto
+#: in camera (l0/equilibrium.py). Se il gas esce prima che la cinetica abbia
+#: finito, quel numero non e' ottimistico: e' falso, e ottimizzarlo produce un
+#: motore che sulla carta va e in giardino no.
+#:
+#: Da = 1 e' la soglia di spegnimento di un reattore PERFETTAMENTE miscelato.
+#: Una camera reale non lo e': ha una distribuzione dei tempi di residenza, e
+#: la frazione di fluido che attraversa piu' in fretta della media e' quella
+#: che decide. Il fattore 5 copre quella coda. E' una scelta, dichiarata qui.
+MIN_DAMKOHLER = 5.0
 
 
 def objectives_l0(
@@ -55,6 +101,8 @@ def objectives_l0(
     geometry: GeometryArtifact | None = None,
     min_feature_size: float | None = None,
     derived: Mapping[str, float] | None = None,
+    tau_chem: float | None = None,
+    q_removable: float | None = None,
 ) -> Objectives:
     """Obiettivi e vincoli valutabili a L0, in millisecondi.
 
@@ -68,11 +116,34 @@ def objectives_l0(
     f: dict[str, float] = {
         "neg_thrust": -l0.thrust,
         "neg_isp_total": -l0.Isp_s,
+        "neg_isp_fuel": -l0.Isp_fuel_s,
     }
     g: dict[str, float] = {}
     source: dict[str, str] = {k: "l0.cycle" for k in f}
 
     d = dict(derived or {})
+
+    # --- severita' termica ------------------------------------------------- #
+    # q_throat resta None se Cantera non ha potuto dare le proprieta' di
+    # trasporto: in quel caso NON entra fra gli obiettivi, invece di entrarci
+    # come zero (che vorrebbe dire "gola fredda", il contrario del vero).
+    if l0.q_throat is not None:
+        f["q_throat"] = l0.q_throat
+        source["q_throat"] = "l0.cycle/bartz"
+        if q_removable is not None:
+            # q <= q_estraibile  ->  g = (q - q_max) / q_max
+            g["throat_heat_flux"] = (l0.q_throat - q_removable) / q_removable
+            source["throat_heat_flux"] = "cooling"
+
+    # --- completezza della combustione -------------------------------------- #
+    # tau_res arriva dalla geometria, tau_chem dalla cinetica: servono ENTRAMBI,
+    # e se manca uno dei due il Damkohler non e' zero, e' ignoto.
+    if tau_chem is not None and l0.tau_res is not None and tau_chem > 0.0:
+        da = l0.tau_res / tau_chem
+        f["neg_damkohler"] = -da
+        source["neg_damkohler"] = "l0.chemistry"
+        g["combustion_residence"] = (MIN_DAMKOHLER - da) / MIN_DAMKOHLER
+        source["combustion_residence"] = "l0.chemistry"
 
     # --- vincoli di alimentazione ---------------------------------------- #
     dp_f = d.get("dp_inj_fuel")
@@ -85,7 +156,9 @@ def objectives_l0(
         source["fuel_supply_pressure"] = "geometry.parameters"
     dp_ox = d.get("dp_inj_ox")
     if dp_ox is not None:
+        g["ox_dp_stability"] = (MIN_OX_INJECTOR_DP_FRACTION * p_c - dp_ox) / p_c
         g["ox_supply_pressure"] = (p_c + dp_ox - op.p_air_supply) / op.p_air_supply
+        source["ox_dp_stability"] = "geometry.parameters"
         source["ox_supply_pressure"] = "geometry.parameters"
 
     if op.mdot_air_max is not None:
@@ -94,10 +167,18 @@ def objectives_l0(
 
     # --- vincoli geometrici ----------------------------------------------- #
     if geometry is not None:
-        f["wall_volume"] = geometry.volume       # proxy di massa a densita' fissa
+        f["wall_volume"] = geometry.volume       # volume VERO, dal CAD
         source["wall_volume"] = "geometry.build"
         g["watertight"] = 0.0 if geometry.is_watertight_mesh else 1.0
         source["watertight"] = "geometry.build"
+    elif l0.wall_volume is not None:
+        # Volume in forma chiusa, senza costruire il solido: coincide con OCCT
+        # a precisione di macchina (test_objectives lo misura) e costa
+        # microsecondi invece di ~100 ms. `source` dice comunque quale dei due
+        # e' finito qui: in un database da migliaia di run, non poterli
+        # distinguere sarebbe irreparabile.
+        f["wall_volume"] = l0.wall_volume
+        source["wall_volume"] = "geometry.profile/esatto"
 
     if min_feature_size is not None and d:
         quote = [d[k] for k in ("d_ox", "d_fuel", "d_film", "film_land", "t_wall")
@@ -119,6 +200,8 @@ def objectives_l1(
     geometry: GeometryArtifact | None = None,
     min_feature_size: float | None = None,
     derived: Mapping[str, float] | None = None,
+    tau_chem: float | None = None,
+    q_removable: float | None = None,
 ) -> Objectives:
     """Obiettivi completi, con i margini dal FEM.
 
@@ -126,7 +209,8 @@ def objectives_l1(
     buono), mentre `g` vuole il contrario. L'inversione avviene qui, una volta
     sola, invece che in ogni punto d'uso.
     """
-    base = objectives_l0(run_id, l0, op, p_c, geometry, min_feature_size, derived)
+    base = objectives_l0(run_id, l0, op, p_c, geometry, min_feature_size,
+                         derived, tau_chem, q_removable)
     g = dict(base.g)
     g["margin_yield"] = -fem.margin_yield
     g["margin_temp"] = -fem.margin_temp

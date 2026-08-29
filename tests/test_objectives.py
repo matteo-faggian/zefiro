@@ -118,3 +118,104 @@ def test_feasible_richiede_tutti_i_vincoli_non_positivi(operating_point, evaluat
     params, l0, p_c = evaluated
     o = objectives_l0("r", l0, operating_point, p_c, derived=params.derived)
     assert o.feasible == all(v <= 0.0 for v in o.g.values())
+
+
+# --- proxy di massa contro il CAD ------------------------------------------- #
+
+@pytest.mark.slow
+def test_volume_in_forma_chiusa_coincide_col_cad(operating_point, design_vector):
+    """`objectives_l0` usa la formula chiusa quando il CAD non c'e'.
+
+    E' quel numero che l'ottimizzatore minimizza per decine di migliaia di
+    valutazioni: se divergesse dal volume vero, si ottimizzerebbe una massa
+    che non esiste. Qui si costruisce davvero il solido con OCCT e si misura.
+
+    La soglia e' 1e-9 e non una percentuale perche' la formula non e'
+    un'approssimazione: il solido E' la rivoluzione di quel poligono. Una
+    versione precedente stimava a parete sottile e sbagliava del 7.7 %,
+    contando due volte il materiale agli spigoli concavi.
+    """
+    from zefiro.geometry.build import BuildOptions, build_solid
+    from zefiro.geometry.parameters import derive
+
+    params, l0 = derive(design_vector, operating_point)
+    # senza i fori d'iniezione: il proxy non li modella, e confrontare un
+    # solido forato con una stima non forata misurerebbe i fori, non il proxy.
+    solido = build_solid(params, BuildOptions(include_injection=False))
+    v_cad = solido.volume * 1.0e-9                     # mm^3 -> m^3
+    errore = abs(l0.wall_volume - v_cad) / v_cad
+    assert errore < 1.0e-9, (
+        f"proxy {l0.wall_volume*1e6:.1f} cm^3 contro CAD "
+        f"{v_cad*1e6:.1f} cm^3: errore {errore:.1%}"
+    )
+
+
+def test_formula_e_cad_non_si_confondono(operating_point, design_vector):
+    """`source` deve dire quale dei due volumi e' finito nell'obiettivo:
+    confonderli in un database di mille run e' irreparabile."""
+    from zefiro.geometry.parameters import derive
+    from zefiro.opt.objectives import objectives_l0
+
+    params, l0 = derive(design_vector, operating_point)
+    o = objectives_l0("r", l0, operating_point, design_vector.values["p_c"],
+                      geometry=None, derived=params.derived)
+    assert o.source["wall_volume"] == "geometry.profile/esatto"
+
+
+def test_damkohler_assente_non_diventa_zero(operating_point, design_vector):
+    """Senza tau_chem il vincolo di residenza deve restare FUORI dal dizionario:
+    metterlo a zero direbbe 'verificato e soddisfatto', che e' falso."""
+    from zefiro.geometry.parameters import derive
+    from zefiro.opt.objectives import objectives_l0
+
+    params, l0 = derive(design_vector, operating_point)
+    o = objectives_l0("r", l0, operating_point, design_vector.values["p_c"],
+                      derived=params.derived, tau_chem=None)
+    assert "combustion_residence" not in o.g
+    assert "neg_damkohler" not in o.f
+
+    o2 = objectives_l0("r", l0, operating_point, design_vector.values["p_c"],
+                       derived=params.derived, tau_chem=40.0e-6)
+    assert "combustion_residence" in o2.g
+    da = -o2.f["neg_damkohler"]
+    assert da == pytest.approx(l0.tau_res / 40.0e-6)
+
+
+def test_vincolo_di_dp_aria_esiste_ed_e_simmetrico(operating_point, design_vector):
+    """Regressione su un difetto TROVATO DALL'OTTIMIZZATORE.
+
+    Senza `ox_dp_stability` NSGA-II allargava i fori d'aria fino ad azzerarne
+    il Dp, per guadagnare pressione di camera contro il serbatoio. Il vincolo
+    lato combustibile c'era e quello lato aria no: un'asimmetria che nessuno
+    aveva scritto apposta, e che l'ottimizzatore ha trovato in una run.
+
+    Qui si verifica che i due vincoli esistano entrambi e abbiano la STESSA
+    forma, cosi' l'asimmetria non puo' tornare di nascosto.
+    """
+    from zefiro.geometry.parameters import derive
+    from zefiro.opt.objectives import (
+        MIN_INJECTOR_DP_FRACTION,
+        MIN_OX_INJECTOR_DP_FRACTION,
+        objectives_l0,
+    )
+
+    params, l0 = derive(design_vector, operating_point)
+    p_c = design_vector.values["p_c"]
+    o = objectives_l0("r", l0, operating_point, p_c, derived=params.derived)
+
+    assert "ox_dp_stability" in o.g and "fuel_dp_stability" in o.g
+    d = params.derived
+    assert o.g["ox_dp_stability"] == pytest.approx(
+        (MIN_OX_INJECTOR_DP_FRACTION * p_c - d["dp_inj_ox"]) / p_c)
+    assert o.g["fuel_dp_stability"] == pytest.approx(
+        (MIN_INJECTOR_DP_FRACTION * p_c - d["dp_inj_fuel"]) / p_c)
+
+
+def test_il_tetto_di_p_c_e_quello_ricavato_a_mano():
+    """Con Dp_aria >= 15 % di p_c e serbatoio a 6 bar, il massimo ammesso e'
+    p_c = 6/1.15 = 5.22 bar, cioe' il valore in config/design_default.yaml.
+    Se qualcuno cambia la soglia senza accorgersene, questo test lo dice."""
+    from zefiro.opt.objectives import MIN_OX_INJECTOR_DP_FRACTION
+
+    p_c_max = 6.0e5 / (1.0 + MIN_OX_INJECTOR_DP_FRACTION)
+    assert p_c_max / 1e5 == pytest.approx(5.22, abs=0.01)

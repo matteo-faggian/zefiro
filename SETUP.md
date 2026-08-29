@@ -193,3 +193,70 @@ i wheel — quindi se ti fa comodo aprire il repo in un IDE su Windows e sperime
 fallo. Regola sola: **i risultati prodotti da Windows non entrano nel database
 delle run.** Il campo `env_fingerprint` in `env.json` serve proprio a rendere questa
 regola verificabile invece che sperata.
+
+---
+
+## 7. Far girare l'ottimizzazione (fase 5)
+
+Tre comandi, in ordine. Tutti da dentro WSL, con l'ambiente attivo.
+
+### 7.1 Prima: verificare che gli obiettivi abbiano ancora senso
+
+```bash
+python scripts/objective_screening.py -n 400 --seed 20260829
+```
+
+Campiona 400 punti del box e stampa la matrice di correlazione di rango fra le
+metriche candidate. **Va rifatto ogni volta che cambi i bound o il punto
+operativo**: due obiettivi che oggi sono indipendenti possono diventare
+degeneri con un box diverso, e un fronte degenere non lo vedi guardandolo — lo
+vedi solo qui. Costa ~2 minuti (la parte lenta è tabulare il tempo chimico).
+
+### 7.2 Poi: il fronte di Pareto
+
+```bash
+python scripts/optimize_l0.py --pop 200 --gen 250 --seed 101 --seeds 3 --jobs 23
+```
+
+`--seeds 3` ripete la run con tre semi diversi e confronta gli ipervolumi. Non
+è un lusso: NSGA-II è stocastico, e **un fronte da un solo seme è un campione,
+non un risultato**. Se la dispersione supera il 5 % lo script lo dice, e la
+risposta giusta è alzare `--gen`, non fidarsi lo stesso.
+
+Costo sulla tua macchina: ~13 ms per valutazione su 23 processi, cioè **~30 s
+per seme** a 50 000 valutazioni. Puoi permetterti `--pop 400 --gen 600 --seeds
+10` (2.4 milioni di valutazioni) in una ventina di minuti. Il budget non è più
+il vincolo: usalo per i semi, non solo per le generazioni.
+
+### 7.3 Infine: leggere il fronte
+
+```bash
+python scripts/pareto_report.py runs/pareto/pareto_seed10{1,2,3}.json \
+       --plot runs/pareto/fronte.png
+```
+
+Un fronte è un elenco di compromessi, non una risposta. Il report separa:
+
+* **gli estremi** e cosa costa passare dall'uno all'altro;
+* il **ginocchio**, cioè il punto più vicino all'ideale in norma normalizzata —
+  un punto di partenza dichiarato, non «la» risposta;
+* i parametri di **compromesso** contro quelli **decisi** (stesso valore su
+  tutto il fronte: quelli non sono compromessi, sono conclusioni). Se un
+  parametro deciso sta al bordo del box, **il bound è stretto e il vero ottimo
+  è fuori**: va rimesso in discussione, non subìto;
+* il **prezzo** di ciascun obiettivo. È la sezione che conta di più: se
+  spostare un obiettivo di un ordine di grandezza costa il 2 % su un altro,
+  quello non è un compromesso ma una decisione già presa.
+
+### 7.4 E verificare un punto, in modo indipendente
+
+```bash
+python scripts/verify_pareto_point.py runs/pareto/pareto_seed101.json \
+       --cad runs/pareto/cad
+```
+
+Riparte dal vettore `x` e **rifà tutto da capo** — termochimica, geometria, CAD
+vero con OCCT, vincoli — senza riusare niente di ciò che l'ottimizzatore aveva
+in memoria. Se l'ottimizzatore avesse un vincolo col segno sbagliato o leggesse
+la colonna sbagliata, questo controllo lo vedrebbe; rileggere i suoi numeri no.
+Esce con codice 1 se qualcosa non torna, quindi lo puoi mettere in uno script.

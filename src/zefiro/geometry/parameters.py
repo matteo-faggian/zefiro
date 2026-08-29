@@ -9,9 +9,16 @@ funzione PURA, senza iterazioni ne' tolleranze.
 """
 from __future__ import annotations
 
+import dataclasses
+import functools
 import math
 
 from zefiro.geometry.aerospike import area_ratio, plug_contour
+from zefiro.geometry.profile import (
+    meridian_polygon,
+    revolved_volume,
+    wetted_area_from_contour,
+)
 from zefiro.l0.cycle import evaluate_l0
 from zefiro.schemas import DesignVector, GeometryParams, L0Result, OperatingPoint
 from zefiro.units import DEG, R_UNIVERSAL
@@ -142,8 +149,17 @@ def derive(
     R_film = R_c - d_film
     film_land = 0.5 * d_film
 
+    # Volume del pezzo, ESATTO: e' la rivoluzione del poligono meridiano, e
+    # quel volume ha forma chiusa (geometry/profile.py). Non e' una stima di
+    # parete sottile - quella sbagliava del 7 % perche' contava due volte il
+    # materiale agli spigoli concavi - e non costa OCCT.
+    area_bagnata = wetted_area_from_contour(R_c, R_lip, L_c, L_conv, r_cb,
+                                            contour.x, contour.r)
+    t_face = max(2.0 * v["t_wall"], 2.0e-3)
     derived = {
-        "A_t": A_t, "D_t_eq": D_t_eq, "gamma_c": gamma,
+        "A_t": A_t,
+        "wetted_area": area_bagnata,
+        "D_t_eq": D_t_eq, "gamma_c": gamma,
         "M_e": l0.M_e, "epsilon_gamma": eps_gamma, "epsilon_l0": l0.epsilon,
         "epsilon_mismatch": abs(eps_gamma - l0.epsilon) / l0.epsilon,
         "R_lip": R_lip, "r_throat_plug": contour.r_throat,
@@ -159,7 +175,7 @@ def derive(
         "rho_chamber": rho_c, "u_chamber": u_chamber,
         "A_film_tot": A_film_tot, "d_film": d_film,
         "R_film": R_film, "film_land": film_land,
-        "t_wall": v["t_wall"], "t_face": max(2.0 * v["t_wall"], 2.0e-3),
+        "t_wall": v["t_wall"], "t_face": t_face,
         "mdot_air": l0.mdot_air,
         "mdot_fuel_core": l0.mdot_fuel_core,
         "mdot_fuel_film": l0.mdot_fuel_film,
@@ -168,6 +184,13 @@ def derive(
         derived["dp_inj_ox"] = dp_ox
     if dp_f is not None:
         derived["dp_inj_fuel"] = dp_f
+
+    wall_volume = revolved_volume(
+        meridian_polygon(derived, contour.x, contour.r)
+    )
+    derived["wall_volume"] = wall_volume
+    l0 = dataclasses.replace(l0, wall_volume=wall_volume,
+                             tau_res=(rho_c * V_c / mdot_tot))
 
     params = GeometryParams(
         free=v,
@@ -187,13 +210,21 @@ def _injector_dp(mdot: float, cd: float | None, area: float, rho: float) -> floa
 
 def _fuel_molar_mass(op: OperatingPoint) -> float:
     """Massa molare del combustibile [kg/kmol], dal meccanismo dichiarato."""
-    import cantera as ct
-
-    gas = ct.Solution(op.fuel.thermo_source)
-    return sum(
-        frac * gas.molecular_weights[gas.species_index(name)]
-        for name, frac in op.fuel.composition.items()
+    return _molar_mass_cached(
+        tuple(sorted(op.fuel.composition.items())), op.fuel.thermo_source
     )
+
+
+@functools.lru_cache(maxsize=64)
+def _molar_mass_cached(composition: tuple, mechanism: str) -> float:
+    """Il risultato dipende solo da (composizione, meccanismo), che in una run
+    non cambiano mai: si memorizza il NUMERO, non l'oggetto Cantera, cosi' non
+    c'e' nessuno stato condiviso di cui preoccuparsi."""
+    from zefiro.l0.mixture import solution
+
+    gas = solution(mechanism)
+    return sum(frac * gas.molecular_weights[gas.species_index(name)]
+               for name, frac in composition)
 
 
 def check_manufacturability(

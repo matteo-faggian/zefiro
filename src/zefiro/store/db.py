@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Sequence
 
 from zefiro.opt.objectives import CONSTRAINT_NAMES, OBJECTIVE_NAMES
 from zefiro.schemas import (
     SCHEMA_VERSION,
+    ContractViolation,
     DesignVector,
     GeometryArtifact,
     L0Result,
@@ -42,6 +43,7 @@ L0_SCALAR_FIELDS: tuple[str, ...] = (
     "T_ad", "gamma_c", "MW_c", "cp_c",
     "c_star", "M_e", "epsilon", "C_F", "Isp_s", "Isp_fuel_s", "thrust", "A_t",
     "tau_res", "tau_chem", "damkohler",
+    "q_throat", "T_wall_adiabatic", "wall_volume",
 )
 
 GEOMETRY_SCALAR_FIELDS: tuple[str, ...] = (
@@ -88,6 +90,21 @@ def schema_columns() -> list[tuple[str, str]]:
     cols += [("geom_sha256_step", "TEXT"), ("geom_sha256_stl", "TEXT")]
     cols += [("f_" + n, "REAL") for n in OBJECTIVE_NAMES]
     cols += [("g_" + n, "REAL") for n in CONSTRAINT_NAMES]
+
+    # Sentinella. I prefissi "f_" e "g_" degli obiettivi vivono nello stesso
+    # spazio dei nomi dei parametri di progetto, e uno di questi si chiama gia'
+    # `f_film`: basterebbe un obiettivo chiamato "film" per avere due colonne
+    # con lo stesso nome, che SQLite accetta in silenzio e rende una delle due
+    # irraggiungibile. Meglio esplodere qui che scoprirlo su mille run.
+    visti: dict[str, int] = {}
+    for n, _t in cols:
+        visti[n] = visti.get(n, 0) + 1
+    doppie = sorted(n for n, k in visti.items() if k > 1)
+    if doppie:
+        raise ContractViolation(
+            f"Nomi di colonna duplicati nello schema: {doppie}. "
+            "Rinomina l'obiettivo, il vincolo o il parametro di progetto."
+        )
     return cols
 
 
@@ -118,9 +135,52 @@ class RunStore:
         cur = self.conn.cursor()
         for table in ("runs", "runs_dirty"):
             cur.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({ddl})')
+        self.migrate()
         for c in _INDEXED + _design_columns():
             cur.execute(f'CREATE INDEX IF NOT EXISTS "idx_runs_{c}" ON runs ("{c}")')
         self.conn.commit()
+
+    def migrate(self) -> dict[str, list[str]]:
+        """Allinea un database esistente allo schema corrente.
+
+        Serve perche' `OBJECTIVE_NAMES` e `CONSTRAINT_NAMES` DEFINISCONO le
+        colonne: aggiungere un obiettivo cambia lo schema, e un file scritto
+        prima non ha quella colonna. `CREATE TABLE IF NOT EXISTS` non se ne
+        accorge e le scritture successive fallirebbero a meta' popolamento.
+
+        Si aggiungono solo colonne (ALTER TABLE ADD COLUMN), mai si tolgono:
+        le righe vecchie restano leggibili e i campi nuovi valgono NULL, che e'
+        l'unica risposta onesta ("quella run non l'ha misurato") - diverso da
+        zero, che significherebbe "misurato, vale zero".
+
+        Una colonna che esiste nel file ma NON nello schema corrente e' invece
+        un segnale di ALLARME, non di routine: vuol dire che questo codice e'
+        piu' vecchio del database, e scriverci sopra corromperebbe dati che non
+        sa produrre. In quel caso si solleva.
+        """
+        attesi = {n: t for n, t in schema_columns()}
+        aggiunte: dict[str, list[str]] = {}
+        cur = self.conn.cursor()
+        for table in ("runs", "runs_dirty"):
+            presenti = {r["name"] for r in cur.execute(f'PRAGMA table_info("{table}")')}
+            if not presenti:
+                continue
+            orfane = presenti - set(attesi)
+            if orfane:
+                raise ContractViolation(
+                    f'La tabella "{table}" di {self.path.name} ha colonne che questo '
+                    f"codice non conosce: {sorted(orfane)}. Il database e' stato scritto "
+                    "da una versione PIU' RECENTE; aggiorna il codice invece di "
+                    "scriverci sopra."
+                )
+            nuove = [c for c in attesi if c not in presenti]
+            for c in nuove:
+                tipo = attesi[c].replace(" PRIMARY KEY", "").replace(" NOT NULL", "")
+                cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{c}" {tipo}')
+            if nuove:
+                aggiunte[table] = nuove
+        self.conn.commit()
+        return aggiunte
 
     # -- scrittura --------------------------------------------------------- #
     def insert(

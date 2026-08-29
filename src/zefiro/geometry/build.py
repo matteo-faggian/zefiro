@@ -30,6 +30,7 @@ from build123d import (
     revolve,
 )
 
+from zefiro.geometry.profile import meridian_polygon, wetted_area_from_contour
 from zefiro.schemas import GeometryArtifact, GeometryParams
 
 _MM = 1000.0          # m -> mm
@@ -49,81 +50,25 @@ class BuildOptions:
 
 
 def wall_profile_mm(p: GeometryParams) -> list[tuple[float, float, float]]:
-    """Poligono chiuso e semplice nel semipiano (x, r), in mm.
+    """Il poligono meridiano di `geometry.profile`, in mm e in forma 3D.
 
-    Percorso: faccia posteriore della piastra -> mantello esterno ->
-    esterno del convergente -> faccia del labbro -> lato gas del convergente ->
-    parete di camera -> faccia di iniezione -> corpo centrale -> contorno del
-    plug -> chiusura sull'asse.
-
-    Ne risulta UN SOLO solido connesso: piastra, mantello e plug sono lo stesso
-    pezzo, che e' anche il modo in cui verra' stampato in SLM.
+    Il poligono e' definito UNA VOLTA SOLA, in `profile.meridian_polygon`, che
+    non importa OCCT. Averne due copie sarebbe il modo piu' rapido di far
+    divergere il volume che l'ottimizzatore minimizza da quello che la
+    stampante stampa.
     """
-    d = p.derived
-    t = d["t_wall"] * _MM
-    tf = d["t_face"] * _MM
-    R_c = d["R_c"] * _MM
-    R_lip = d["R_lip"] * _MM
-    L_c = d["L_c"] * _MM
-    L_conv = d["L_conv"] * _MM
-    r_cb = d["r_centerbody"] * _MM
-    x_lip = L_c + L_conv
-
-    cx = [v * _MM for v in p.plug_contour_x]
-    cr = [v * _MM for v in p.plug_contour_r]
-    x_plug_start = x_lip + cx[0]
-    if x_plug_start <= 0.0:
-        raise ValueError(
-            "Il punto di gola del plug cade a monte della faccia di iniezione: "
-            "camera troppo corta. Alza Lc_over_Dc o conv_half_angle."
-        )
-
-    pts: list[tuple[float, float, float]] = [
-        (-tf, 0.0, 0.0),
-        (-tf, 0.0, R_c + t),
-        (L_c, 0.0, R_c + t),
-        (x_lip, 0.0, R_lip + t),     # esterno del convergente (spessore RADIALE)
-        (x_lip, 0.0, R_lip),         # faccia del labbro, smussata di spessore t
-        (L_c, 0.0, R_c),             # lato gas del convergente, verso monte
-        (0.0, 0.0, R_c),             # parete di camera
-        (0.0, 0.0, r_cb),            # faccia di iniezione, verso l'asse
-        (x_plug_start, 0.0, r_cb),   # corpo centrale cilindrico
-    ]
-    # NB: si salta cx[0]/cr[0], che coincide esattamente con l'ultimo punto
-    # gia' inserito (fine del corpo centrale). Un punto duplicato genera uno
-    # spigolo di lunghezza nulla e OCCT rifiuta la polilinea.
-    pts += [(x_lip + xi, 0.0, ri) for xi, ri in zip(cx[1:], cr[1:])]
-    if cr[-1] > 1.0e-9:                      # plug troncato: faccia di base
-        pts.append((x_lip + cx[-1], 0.0, 0.0))
-    return pts
+    poly = meridian_polygon(p.derived, p.plug_contour_x, p.plug_contour_r)
+    return [(x * _MM, 0.0, r * _MM) for x, r in poly]
 
 
 def wetted_area(p: GeometryParams) -> float:
-    """Superficie bagnata dai gas [m^2], per il teorema di Pappo-Guldino.
-
-    Calcolata analiticamente dal profilo, non dal CAD: e' una verifica
-    INDIPENDENTE dalla tassellazione e dalle booleane.
-    """
+    """Superficie bagnata dai gas [m^2]. Delega a `geometry.profile`, che non
+    importa OCCT ed e' quindi usabile anche sul percorso veloce."""
     d = p.derived
-    R_c, R_lip = d["R_c"], d["R_lip"]
-    L_c, L_conv, r_cb = d["L_c"], d["L_conv"], d["r_centerbody"]
-    x_lip = L_c + L_conv
-    segs: list[tuple[float, float, float, float]] = [
-        (0.0, R_c, L_c, R_c),                  # parete di camera
-        (L_c, R_c, x_lip, R_lip),              # convergente
-        (0.0, R_c, 0.0, r_cb),                 # faccia di iniezione (anulare)
-        (0.0, r_cb, x_lip + p.plug_contour_x[0], r_cb),   # corpo centrale
-    ]
-    segs += [
-        (x_lip + p.plug_contour_x[i], p.plug_contour_r[i],
-         x_lip + p.plug_contour_x[i + 1], p.plug_contour_r[i + 1])
-        for i in range(len(p.plug_contour_x) - 1)
-    ]
-    total = 0.0
-    for x0, r0, x1, r1 in segs:
-        slant = math.hypot(x1 - x0, r1 - r0)
-        total += math.pi * (r0 + r1) * slant      # frustum laterale
-    return total
+    return wetted_area_from_contour(
+        d["R_c"], d["R_lip"], d["L_c"], d["L_conv"], d["r_centerbody"],
+        p.plug_contour_x, p.plug_contour_r,
+    )
 
 
 def build_solid(p: GeometryParams, opts: BuildOptions = BuildOptions()):

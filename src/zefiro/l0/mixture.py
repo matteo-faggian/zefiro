@@ -6,7 +6,8 @@ Cantera sui polinomi NASA del meccanismo dichiarato.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+
+import functools
 
 import cantera as ct
 
@@ -18,6 +19,30 @@ from zefiro.units import air_composition_string
 RICH_EQUILIBRIUM_LIMIT = 1.5
 
 
+@functools.lru_cache(maxsize=8)
+def solution(mechanism: str) -> ct.Solution:
+    """Una `ct.Solution` per meccanismo, per processo.
+
+    Perche' esiste questa cache: costruire una Solution significa leggere e
+    compilare il file del meccanismo (gri30 ha 53 specie e 325 reazioni), e
+    costa ~43 ms. Nel ciclo dell'ottimizzatore la si costruiva DUE volte per
+    valutazione, cioe' 86 ms degli ~107 ms totali: l'80 % del tempo macchina
+    se ne andava a rileggere lo stesso file.
+
+    Perche' e' sicuro riusarla: l'oggetto porta con se' uno stato (T, p, X) che
+    il codice REIMPOSTA sempre prima di leggerne qualcosa (`gas.TPX = ...`),
+    quindi non c'e' stato che sopravviva da una valutazione all'altra. Il test
+    `test_mixture.py::test_la_cache_non_cambia_i_risultati` lo verifica
+    confrontando con Solution costruite da zero.
+
+    ATTENZIONE: proprio perche' e' condivisa e mutabile, NON e' sicura fra
+    THREAD. Il parallelismo dell'ottimizzatore usa PROCESSI (ProcessPoolExecutor),
+    che hanno ciascuno la propria cache. Chi introducesse dei thread dovrebbe
+    passare a una cache thread-local.
+    """
+    return ct.Solution(mechanism)
+
+
 @dataclass
 class MixtureModel:
     """Modello di miscela legato a un preciso file di meccanismo Cantera."""
@@ -27,7 +52,7 @@ class MixtureModel:
 
     @classmethod
     def from_fuel(cls, fuel: FuelSpec) -> "MixtureModel":
-        gas = ct.Solution(fuel.thermo_source)
+        gas = solution(fuel.thermo_source)
         missing = [s for s in fuel.composition if s not in gas.species_names]
         if missing:
             raise MissingThermoData(

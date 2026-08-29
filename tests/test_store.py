@@ -121,3 +121,60 @@ def test_schema_parquet_sbagliato_viene_rifiutato(tmp_path):
     pq.write_table(pa.table({"a": [1.0], "b": [2.0]}), str(bad))
     with pytest.raises(ValueError, match="Schema Parquet inatteso"):
         read_wall_field(bad)
+
+
+# --- migrazione di schema --------------------------------------------------- #
+
+def test_migrate_aggiunge_le_colonne_mancanti(tmp_path):
+    """Un database scritto prima che esistessero gli obiettivi nuovi deve
+    diventare leggibile e scrivibile, senza perdere le righe gia' presenti."""
+    import sqlite3
+
+    from zefiro.store.db import RunStore, schema_columns
+
+    db = tmp_path / "vecchio.db"
+    attuali = schema_columns()
+    tolte = ("f_neg_isp_fuel", "f_q_throat", "g_throat_heat_flux",
+             "g_combustion_residence", "q_throat")
+    vecchie = [(n, t) for n, t in attuali if n not in tolte]
+    assert len(vecchie) == len(attuali) - len(tolte)
+    con = sqlite3.connect(db)
+    ddl = ", ".join(f'"{n}" {t}' for n, t in vecchie)
+    for tab in ("runs", "runs_dirty"):
+        con.execute(f'CREATE TABLE "{tab}" ({ddl})')
+    con.execute('INSERT INTO runs (run_id, schema_version, created_utc, fidelity) '
+                "VALUES ('vecchia', 'zefiro-schema-0.1.0', '2026-01-01T00:00:00Z', 'L0')")
+    con.commit()
+    con.close()
+
+    with RunStore(db) as store:                      # la migrazione gira qui
+        cols = {r["name"] for r in store.query('SELECT name FROM pragma_table_info("runs")')}
+        for c in tolte:
+            assert c in cols, c
+        righe = store.query("SELECT * FROM runs")
+        assert len(righe) == 1 and righe[0]["run_id"] == "vecchia"
+        # il campo nuovo su una riga vecchia deve essere NULL, non 0.0
+        assert righe[0]["f_q_throat"] is None
+
+
+def test_migrate_rifiuta_un_database_piu_recente(tmp_path):
+    """Colonne che il codice non conosce = database scritto da una versione
+    successiva. Scriverci sopra perderebbe dati: si deve sollevare."""
+    import sqlite3
+
+    import pytest
+
+    from zefiro.schemas import ContractViolation
+    from zefiro.store.db import RunStore, schema_columns
+
+    db = tmp_path / "futuro.db"
+    ddl = ", ".join(f'"{n}" {t}' for n, t in schema_columns())
+    con = sqlite3.connect(db)
+    for tab in ("runs", "runs_dirty"):
+        con.execute(f'CREATE TABLE "{tab}" ({ddl})')
+        con.execute(f'ALTER TABLE "{tab}" ADD COLUMN "f_obiettivo_del_futuro" REAL')
+    con.commit()
+    con.close()
+
+    with pytest.raises(ContractViolation, match="PIU' RECENTE"):
+        RunStore(db)

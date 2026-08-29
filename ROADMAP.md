@@ -236,20 +236,54 @@ sa misurare il mixing.
 
 ## Fase 5 — Obiettivi, vincoli, ottimizzazione multi-obiettivo
 
-**Da fare**
-- `opt/objectives.py`: completare `objectives_l1`, con margini strutturali e
-  termici e vincoli di fabbricabilità SLM.
-- `opt/driver.py`: NSGA-II su L0 (migliaia di valutazioni), con `seed`
-  obbligatorio.
+**Stato: il ramo L0 è CHIUSO** (2026-08-29). Il ramo L1 resta aperto perché
+dipende dalla fase 3.
 
-**Criteri di chiusura**
-- Il fronte di Pareto è **stabile** rispetto al seme: due run con semi diversi
-  danno fronti la cui distanza di Hausdorff normalizzata è sotto il 5 %.
-- Nessun punto del fronte viola un vincolo di fabbricabilità (verifica a
-  posteriori indipendente dall'ottimizzatore).
-- Esiste almeno un punto del fronte che soddisfa **tutti** i vincoli hard. Se
-  non esiste, il problema è sovravincolato e va detto — non è un fallimento
-  dell'ottimizzatore.
+**Fatto**
+- `opt/objectives.py`: registro a 6 obiettivi e 10 vincoli. La scelta di *quali*
+  mettere nel fronte è **misurata**, non assunta: `scripts/objective_screening.py`
+  campiona 400 punti e calcola la correlazione di rango. Vedi
+  `docs/architettura.md` §8ter.1.
+- `l0/chemistry.py`: tempo chimico come **blowout di un PSR**, non come ritardo
+  di autoaccensione (che a 300 K darebbe la risposta sbagliata). Tabulato su
+  griglia, errore d'interpolazione misurato.
+- `l0/mixture.solution`: cache della `ct.Solution`. 107 → 13 ms per valutazione.
+- `geometry/profile.py`: volume del pezzo in **forma chiusa esatta** (rivoluzione
+  del poligono meridiano). Sostituisce una stima di parete sottile che sbagliava
+  del 7.7 %. Coincide con OCCT a ~1e-15 e costa microsecondi.
+- `opt/driver.py`: NSGA-II, `seed` obbligatorio, interi riparati dentro
+  l'algoritmo, `front_quality` per la robustezza al seme.
+- `store/db.RunStore.migrate()`: i registri definiscono le colonne, quindi
+  aggiungere un obiettivo è un cambio di schema. Migrazione per `ALTER TABLE`;
+  un database più recente del codice viene rifiutato.
+- `scripts/optimize_l0.py` e `scripts/pareto_report.py`.
+
+**Criteri di chiusura — verifica**
+
+| criterio | esito |
+|---|---|
+| fronte stabile rispetto al seme, sotto il 5 % | **0.64 %** di dispersione dell'ipervolume normalizzato su 3 semi |
+| nessun punto viola un vincolo di fabbricabilità | verificato: `cv_min = cv_avg = 0` dalla 4ª generazione |
+| esiste un punto che soddisfa tutti i vincoli hard | sì, l'intera popolazione finale |
+| il driver ritrova un fronte noto | ZDT1, errore mediano 1.1e-4, con convergenza dimostrata al crescere del budget |
+
+**Cosa ha trovato la prima run, che è il motivo per cui si fanno**
+
+L'ottimizzatore ha portato `d_ox_ratio` al massimo del box per **azzerare il Δp
+dell'iniettore d'aria** e potersi permettere p_c = 5.94 bar contro i 6.0 bar di
+serbatoio. Non era un difetto numerico: era un vincolo **mancante**. Il Δp
+minimo era imposto sul combustibile e non sull'aria, che è il 94 % della
+portata. Aggiunto `ox_dp_stability`; il tetto di p_c torna a 5.22 bar, cioè
+esattamente il valore ricavato a mano mesi prima per un'altra strada.
+
+È il comportamento atteso di un ottimizzatore ed è il motivo per cui vale la
+pena farlo girare: **trova le cose che non hai scritto.**
+
+**Ancora aperto (dipende dalla fase 3)**
+- `objectives_l1`: margini strutturali e termici dal FEM.
+- Il vincolo di **mixing**. A L0 τ_chem è 30–100 µs, ordini di grandezza sotto
+  qualunque tempo di miscelazione reale: Zefiro è limitato dalla miscelazione,
+  non dalla chimica, e la miscelazione L0 non la vede.
 
 ---
 

@@ -944,9 +944,170 @@ fosse colpa del server: un test lo impedisce.
 Il server ascolta su localhost e non ha autenticazione: è uno strumento da
 scrivania.
 
+## 8ter. L'ottimizzazione multi-obiettivo (fase 5)
+
+### 8ter.1 Perché la scelta degli obiettivi è il problema, non un dettaglio
+
+La tentazione, in un motore, è di mettere nel Pareto «spinta e Isp», perché
+sono i due numeri che si citano. Su Zefiro sarebbe sbagliato, e si dimostra in
+una riga di algebra:
+
+    F = Isp · ṁ_tot · g₀
+
+e ṁ_tot è quasi fisso, perché **ṁ_aria è un dato del punto operativo**
+(0.0718 kg/s) e il combustibile è il 4–7 % della massa totale (AFR ≈ 15.7).
+Fra i due estremi di φ ammessi dal box, ṁ_tot cambia del 2.5 %. Spinta e Isp
+sono quindi la stessa grandezza riscalata.
+
+Non è un ragionamento lasciato sulla carta: `scripts/objective_screening.py`
+campiona 400 punti del box con LHS e calcola la matrice di correlazione di
+**rango** (Spearman). Il rango e non la correlazione lineare, perché la
+dominanza di Pareto è una relazione d'ordine: ciò che conta è se due metriche
+ordinano i candidati allo stesso modo, non se stanno su una retta.
+
+Risultato (seed 20260829, `runs/objective_screening.json`):
+
+| coppia | ρ | conseguenza |
+|---|---|---|
+| `neg_thrust` ↔ `neg_isp_total` | **+0.979** | un obiettivo è una copia dell'altro |
+| `neg_isp_total` ↔ `q_throat` | **−0.994** | ogni punto è non dominato |
+| `neg_thrust` ↔ `q_throat` | **−0.956** | idem |
+| `neg_tau_res` ↔ `neg_damkohler` | **+0.954** | τ_chem varia troppo poco per contare |
+
+**Entrambi gli estremi rovinano un fronte, in modi opposti e ugualmente
+inutili.** Con ρ → +1 il fronte collassa su un punto. Con ρ → −1 succede il
+contrario e non è meglio: *ogni* punto diventa non dominato, il fronte è tutto
+lo spazio di progetto, e NSGA-II perde qualunque pressione selettiva. Un
+ottimizzatore che restituisce l'intero box non ha detto niente.
+
+La ragione fisica dietro il −0.994 vale più del numero: **Isp e q di gola sono
+entrambe quasi funzioni monotone della sola p_c** (l'Isp cresce col rapporto di
+espansione, e Bartz dà q ∝ p_c^0.8). Quel «compromesso» è una scansione a un
+parametro travestita da problema multi-obiettivo, e va risolto come tale.
+
+### 8ter.2 Gli obiettivi scelti, e perché sono tre
+
+Restano tre metriche mutuamente quasi indipendenti — |ρ| < 0.21 su **tutte** e
+tre le coppie, che è esattamente la condizione per un fronte tridimensionale
+con dentro dell'informazione vera:
+
+| obiettivo | verso | perché è nel fronte |
+|---|---|---|
+| `neg_thrust` | max F | è ciò per cui il motore esiste |
+| `wall_volume` | min V | tempo macchina e polvere in SLM: è il costo del pezzo |
+| `neg_isp_fuel` | max F/ṁ_GPL | **l'aria è gratis** (compressore), il GPL no (bombola finita) |
+
+`neg_isp_fuel` è l'aggiunta meno ovvia e la più utile. È l'efficienza
+*economica* di Zefiro, ed è quasi ortogonale alla spinta (ρ = 0.081) per una
+ragione fisica precisa: la spinta vuole lo stechiometrico, l'economia di
+combustibile vuole il magro. Sul box campionato varia di **2.5 volte**
+(1157 → 2924 s), contro il 32 % della spinta: è di gran lunga l'obiettivo più
+discriminante.
+
+`q_throat` **non** è un obiettivo: è un **vincolo**, al livello che il
+raffreddamento dichiarato riesce davvero a estrarre. Così la coppia degenere
+(spinta, calore) diventa «massimizza la spinta restando raffreddabile», che è
+il problema di progetto vero e ha una risposta sola.
+
+### 8ter.3 Il tempo chimico, e perché non è il ritardo di autoaccensione
+
+Il vincolo `combustion_residence` chiede Da = τ_res/τ_chem ≥ 5. Il punto
+delicato è **quale** τ_chem.
+
+Il ritardo di autoaccensione — la grandezza che si userebbe d'istinto — qui
+sarebbe la grandezza sbagliata, e non di poco: i reagenti entrano a ~300 K, e a
+300 K una miscela propano/aria non si autoaccende in alcun tempo significativo.
+Il modello direbbe «la camera non brucia», che è falso.
+
+In una camera l'accensione **non è** un'autoaccensione: è sostenuta dal
+ricircolo dei prodotti caldi. La domanda corretta è «dato che l'accensione c'è,
+quanto deve restare il gas per bruciare?», che è la definizione del **tempo di
+blowout di un PSR** (`zefiro/l0/chemistry.py`): il minimo tempo di residenza
+per cui esiste ancora una soluzione stazionaria accesa. È una bifurcazione,
+non una soglia arbitraria, e il test lo verifica cambiando il criterio di
+estinzione da 0.5 a 0.3 e 0.7 senza che il risultato si muova.
+
+Sul box: **τ_chem = 30–100 µs**, contro τ_res = 0.22–16.7 ms, cioè
+**Da = 5.2 … 418**. Due conseguenze:
+
+1. la cinetica non è vincolante quasi da nessuna parte, ma **lo diventa
+   nell'angolo delle camere più piccole** (Da = 5.2), che è esattamente dove
+   l'obiettivo «massa minima» spinge. Il vincolo serve;
+2. τ_chem ~ 30 µs contro tempi di miscelazione che in una camera reale sono
+   ordini di grandezza più lunghi dice che **Zefiro è limitato dalla
+   miscelazione, non dalla chimica**. È il limite che L0 non può vedere, ed è
+   la ragione tecnica per cui la metrica di mixing richiede la CFD (fase 3).
+
+Il PSR costa ~2.5 s a punto, troppo per il ciclo interno: si tabula su griglia
+(p_c, φ) e si interpola in logaritmo. L'errore di interpolazione è **misurato**
+contro il calcolo esatto in punti fuori griglia, non assunto.
+
+### 8ter.4 Il vincolo termico
+
+`q_removable` non è un numero tondo scelto a mano: è ciò che il canale
+dichiarato (d_h = 0.5 mm, 12 m/s, 4 bar) porta via senza far bollire, cioè
+h·(T_sat − T_ingresso − margine) = **6.44 MW/m²**. Il criterio di non
+ebollizione è preferito al flusso critico perché **non richiede nessuna
+proprietà del 316L**, che è ancora il TODO J: dipende solo dall'acqua e dalla
+geometria del canale, cioè da cose note.
+
+Due riserve, entrambe dichiarate a ogni run dallo script:
+
+* **Re = 5250 < 10⁴**: Dittus-Boelter è fuori dal suo campo di validità e
+  sovrastima h. Quindi 6.44 MW/m² è ottimistico;
+* sul box campionato q_gola sta fra 1.69 e 4.06 MW/m², cioè **sotto il limite
+  ovunque**: il vincolo oggi è lasco. Resta scritto perché cambiare il canale o
+  restringere i bound può renderlo mordente, e perché la stessa analisi *senza*
+  acqua dà 1669 K a 5 s, cioè la fusione. La conclusione della sezione 8.6 non
+  cambia: **l'interlock dell'acqua è parte del progetto, non un accessorio.**
+
+### 8ter.5 Come si verifica che il fronte sia un risultato e non rumore
+
+Tre livelli, in ordine di forza:
+
+1. **Il driver contro problemi a soluzione nota.** `tests/test_driver.py` fa
+   girare la stessa configurazione su ZDT1, il cui fronte è `f2 = 1 − √f1` in
+   forma chiusa. Si verificano accuratezza, copertura e uniformità: ciascun
+   criterio da solo si supererebbe barando. E si verifica che l'errore mediano
+   **converga col budget** (1.6e-2 → 8.4e-4 → 1.1e-4 da 9 600 a 40 000
+   valutazioni), che è la prova vera che il cablaggio è giusto. Un secondo
+   problema, costruito perché il vincolo morda, controlla il **segno** di `g`:
+   il vincolo deve risultare *attivo*, cioè g → 0 da sotto.
+2. **La robustezza al seme.** NSGA-II è stocastico: un fronte da un solo seme è
+   un campione, non un risultato. `front_quality` ripete la run con semi
+   diversi e confronta gli ipervolumi **normalizzati** su ideale e nadir
+   dell'unione — necessario perché gli obiettivi hanno scale incomparabili
+   (10² N, 10⁻⁵ m³, 10³ s) e un ipervolume grezzo misurerebbe solo la spinta.
+   Dispersione sotto il 5 % = il fronte non dipende dal seme.
+3. **La lettura del fronte.** `scripts/pareto_report.py` separa i parametri in
+   *compromesso* (variano lungo il fronte) e **decisi** (l'ottimizzatore dà
+   loro lo stesso valore ovunque). I secondi non sono compromessi: sono
+   conclusioni. E se un parametro deciso sta **al bordo del box**, il bound è
+   stretto e il vero ottimo è fuori: va rimesso in discussione invece che
+   subìto.
+
+### 8ter.6 Il costo, e perché conta
+
+Il ciclo di valutazione costava 107 ms. Il profilo diceva che **86 ms erano
+`ct.Solution("gri30.yaml")` costruita due volte per valutazione**: si rileggeva
+e ricompilava lo stesso meccanismo (53 specie, 325 reazioni) decine di migliaia
+di volte. Con una cache per processo (`l0.mixture.solution`) il costo è sceso a
+**13 ms, otto volte meno**.
+
+La cache condivide un oggetto **mutabile**, quindi è verificata invece che
+data per buona: `test_mixture.py` valuta la stessa configurazione due volte con
+una valutazione diversa in mezzo e pretende identità bit a bit su nove
+grandezze. È esclusa così la classe di difetti peggiore che esista — silenziosa
+e dipendente dall'ordine.
+
+Conseguenza pratica: 50 000 valutazioni costano ~30 s sui 23 processi della
+macchina. Il budget non è più il vincolo, quindi **si ripete con più semi**
+invece di fidarsi di uno.
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |
 |---|---|---|
 | `zefiro-schema-0.1.0` | 2026-08-26 | Prima definizione. |
 | — | 2026-08-26 | Aggiunto `zefiro.feed` (impianto di alimentazione). Nessun contratto scambiato modificato, quindi `SCHEMA_VERSION` invariata. |
+| `zefiro-schema-0.2.0` | 2026-08-29 | Fase 5. `L0Result` guadagna `q_throat`, `T_wall_adiabatic`, `wall_volume`. Il registro obiettivi passa da 3 a 6 nomi e quello dei vincoli da 8 a 10 (`throat_heat_flux`, `combustion_residence`). Poiché i registri **definiscono le colonne** del database, `RunStore.migrate()` allinea i file esistenti con `ALTER TABLE`: si aggiungono colonne, mai se ne tolgono, e i campi nuovi sulle righe vecchie restano `NULL` — che è l'unica risposta onesta («quella run non l'ha misurato»), diversa da zero che significherebbe «misurato, vale zero». Un database con colonne che il codice non conosce viene **rifiutato**: è stato scritto da una versione più recente. |

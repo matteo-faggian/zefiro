@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-SCHEMA_VERSION = "zefiro-schema-0.1.0"
+SCHEMA_VERSION = "zefiro-schema-0.2.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -193,6 +193,16 @@ class L0Result(_Serializable):
     Isp_fuel_s: float     # sul solo GPL              -> metrica di combustione
     thrust: float
     A_t: float
+    # severita' termica in gola: viene da Bartz (empirica, +-30 %). Sta qui
+    # perche' e' un OBIETTIVO di progetto, non un post-processing: a parita' di
+    # spinta si sceglie il candidato che scalda meno.
+    q_throat: float | None = None          # W/m^2
+    T_wall_adiabatic: float | None = None  # K
+    # proxy di massa: volume di parete stimato per Pappo-Guldino, senza CAD.
+    # Serve a poter mettere la massa fra gli obiettivi in un ciclo veloce.
+    wall_volume: float | None = None  # m^3, volume ESATTO del solido di
+    #  rivoluzione (geometry/profile.py). Non e' una stima: coincide con OCCT
+    #  a meno dei fori d'iniezione (test_objectives lo misura: ~1e-15).
     # tempi caratteristici
     tau_res: float | None = None
     tau_chem: float | None = None

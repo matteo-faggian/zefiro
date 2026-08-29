@@ -1,6 +1,8 @@
 """Bilancio L0 completo: dai parametri e dal punto operativo a un L0Result."""
 from __future__ import annotations
 
+import math
+
 from zefiro.l0.equilibrium import chamber_state
 from zefiro.l0.mixture import MixtureModel
 from zefiro.l0.nozzle import AEROSPIKE_MEANINGFUL_PR, SHIFTING, expand_to_pressure
@@ -16,6 +18,8 @@ def evaluate_l0(
     mdot_air: float | None = None,
     expansion_mode: str = SHIFTING,
     chamber_volume: float | None = None,
+    thermal_severity: bool = True,
+    wall_temperature: float = 800.0,
 ) -> L0Result:
     """Valutazione L0 di un punto di progetto.
 
@@ -96,6 +100,29 @@ def evaluate_l0(
             "fra iniezione e acustica di camera."
         )
 
+    # --- severita' termica in gola (Bartz) ---------------------------------- #
+    q_throat = T_aw = None
+    if thermal_severity:
+        try:
+            from zefiro.thermal import adiabatic_wall_temperature, bartz_h_gas
+
+            g = model.gas
+            g.TPX = perf.T, perf.p, perf.X
+            g.equilibrate("TP")
+            mu, cpg = g.viscosity, g.cp_mass
+            Pr = mu * cpg / g.thermal_conductivity
+            D_t = 2.0 * math.sqrt(A_t / math.pi)
+            T_aw = adiabatic_wall_temperature(perf.T, 1.0, perf.gamma, Pr)
+            h = bartz_h_gas(D_t, p_c, noz.c_star, mu, cpg, Pr, perf.gamma,
+                            1.0, 1.0, wall_temperature, perf.T)
+            q_throat = h * (T_aw - wall_temperature)
+            assumptions.append(
+                "flusso termico di gola da correlazione di Bartz (empirica, +-30 %), "
+                f"a parete assunta a {wall_temperature:.0f} K"
+            )
+        except Exception:  # noqa: BLE001
+            q_throat = T_aw = None
+
     tau_res = None
     if chamber_volume is not None:
         rho_c = perf.p * perf.MW / (8314.462618153242 * perf.T)
@@ -121,6 +148,8 @@ def evaluate_l0(
         Isp_fuel_s=thrust / (mdot_fuel_tot * G0),
         thrust=thrust,
         A_t=A_t,
+        q_throat=q_throat,
+        T_wall_adiabatic=T_aw,
         tau_res=tau_res,
         tau_chem=None,
         damkohler=None,

@@ -1308,6 +1308,66 @@ campo separato per non confonderli.
   pezzo è al limite di ciò che l'SLM tiene, e quel limite non è ancora un
   numero misurato.
 
+### 8quinquies.6 Il pezzo si stampa? (`sdf/printability.py`)
+
+Un canale interno **non puo' avere supporti**: nessuno entra a toglierli da un
+foro di 0.6 mm. Quindi ogni superficie dentro il circuito deve reggersi da
+sola, sopra i ~45 gradi dal piano di costruzione. Il controllo pesa le AREE:
+dieci triangoli a 10 gradi non sono un problema, un centimetro quadrato di
+tetto piatto si'.
+
+| | prima | dopo |
+|---|---|---|
+| sbalzi dentro i canali | 5.75 cm² | **1.53 cm²** |
+| di cui tetto piatto (0-10°) | 8.70 cm² | **0.07 cm²** |
+| angolo minimo | 0.0° | 0.0° (residuo locale) |
+| **area di gola** | **−25 %** | **−1.2 %** (discretizzazione) |
+
+**Quattro errori miei, tutti trovati misurando.**
+
+1. **Contavo la faccia appoggiata sulla piastra** come sbalzo: 6.5 cm² su 12.5
+   erano immaginari. Una faccia che poggia sulla piastra e' sostenuta dalla
+   piastra.
+2. **Il soffitto di una cava sta a x MAGGIORE, non minore.** Costruendo lungo
+   +x, il materiale sopra il vuoto e' quello a x piu' grande. Alla prima
+   correzione avevo smussato la faccia sbagliata e i 2.4 cm² di tetto piatto
+   erano rimasti esattamente dov'erano. Il verso delle normali di marching
+   cubes ora e' **verificato su una sfera**, dove la risposta si scrive a mano:
+   se fossero entranti, l'analisi direbbe "tutto a posto" proprio dove il pezzo
+   non si stampa.
+3. **`passo_elica_minimo` era `2πR / tan(α)` invece di `2πR · tan(α)`.**
+   A 45 gradi tan vale 1 e le due formule **coincidono**, quindi il caso di
+   prova piu' ovvio non le distingue. Fuori da 45 divergono, e il segno
+   dell'errore e' il peggiore: la formula sbagliata chiede *meno* passo proprio
+   quando si vuole *piu'* margine. Ora e' verificata a 30 e 60 gradi.
+4. **Il test della polvere guardava il bordo della griglia** invece
+   dell'esterno del pezzo, e rispondeva sempre "sacca chiusa". Un test
+   sbagliato che risponde "no" e' subdolo quanto uno che risponde "si": in
+   entrambi i casi non stai misurando quello che credi. Corretto etichettando
+   il non-materiale e guardando in quale componente cadono i canali.
+
+### 8quinquies.7 Il difetto che nessun controllo vedeva
+
+Il raccordo fra mantello e corpo centrale era impostato a **1.5 mm**. Plug e
+labbro distano **1.78 mm**. Un raccordo e' un'operazione *locale* solo se i due
+corpi distano piu' del suo raggio: qui li ha uniti **attraverso la gola**,
+gettandoci dentro materiale.
+
+**L'area di passaggio libera scendeva del 25 %.** Cioe' 25 % di spinta in meno,
+su un motore progettato per 50 N.
+
+Non lo vedeva **nessuno** dei controlli esistenti: il pezzo era chiuso, in un
+blocco solo, con il circuito d'acqua sigillato, il volume del tutto plausibile
+e la massa giusta a meno di qualche grammo. Si vede solo **misurando l'area di
+flusso sul solido costruito**, ed e' ora un controllo permanente
+(`engine.area_di_gola`, con il suo test).
+
+E' la lezione piu' importante di questa fase: su un motore, l'area di gola e'
+la grandezza che fissa portata e spinta, e va **misurata sul pezzo**, non data
+per buona dal disegno. Con il raccordo a 0.5 mm lo scarto residuo e' −1.2 % e
+**converge raffinando la griglia** (−4.7 % a 0.20 mm, −1.2 % a 0.13 mm), quindi
+e' discretizzazione e non materiale.
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |

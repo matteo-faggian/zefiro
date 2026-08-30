@@ -82,7 +82,7 @@ def main() -> int:
 
     op, params, l0 = punto_operativo()
     m = costruisci(params.derived, params.plug_contour_x, params.plug_contour_r,
-                   [CAMERA, GOLA], a.passo, raccordo=1.5e-3)
+                   [CAMERA, GOLA], a.passo, raccordo=5.0e-4)
     campo = to_numpy(m.solido.a)
     g = m.grid
     print(f"griglia {g.shape}, {g.n_voxels/1e6:.1f} Mvoxel")

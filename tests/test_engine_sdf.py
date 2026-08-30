@@ -30,7 +30,7 @@ def motore():
     from build_50N import CAMERA, GOLA, punto_operativo
     op, params, l0 = punto_operativo()
     m = costruisci(params.derived, params.plug_contour_x, params.plug_contour_r,
-                   [CAMERA, GOLA], PASSO, raccordo=1.5e-3)
+                   [CAMERA, GOLA], PASSO, raccordo=5.0e-4)
     return params, l0, m
 
 
@@ -120,3 +120,29 @@ def test_il_collettore_non_puo_strozzare():
         assert sezione_porta >= c.n_canali * c.lato**2, (
             f"attacco {sezione_porta*1e6:.2f} mm2 contro canali "
             f"{c.n_canali*c.lato**2*1e6:.2f} mm2 sul ramo {c.nome}")
+
+
+@pytest.mark.slow
+def test_la_gola_non_e_strozzata_dal_raccordo(motore):
+    """Il difetto piu' grave incontrato, e l'unico che nessun altro controllo
+    vedeva: con un raccordo da 1.5 mm il materiale entrava nell'anello di gola
+    e l'area libera scendeva del 25 %, cioe' 25 % di spinta in meno. Il pezzo
+    restava chiuso, in un blocco solo, col circuito sigillato e un volume del
+    tutto plausibile.
+
+    Un raccordo e' un'operazione LOCALE solo se i due corpi distano piu' del
+    suo raggio. Qui plug e labbro distano 1.78 mm.
+    """
+    from zefiro.sdf.engine import area_di_gola
+
+    params, _, m = motore
+    d = params.derived
+    x_lip = d["L_c"] + d["L_conv"]
+    misurata, teorica = area_di_gola(m, x_lip, params.plug_contour_r[0], d["R_lip"])
+    # la tolleranza e' larga perche' su una griglia grossa il difetto di
+    # discretizzazione e' esso stesso qualche percento: serve a prendere una
+    # strozzatura VERA (che vale decine di percento), non il terzo decimale.
+    assert misurata > 0.90 * teorica, (
+        f"area di gola {misurata*1e6:.2f} mm2 contro {teorica*1e6:.2f} attesa "
+        f"({misurata/teorica-1:+.1%}): qualcosa ostruisce il passaggio"
+    )

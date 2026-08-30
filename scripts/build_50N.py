@@ -39,7 +39,9 @@ CAMERA = CircuitoRaffreddamento(
     #: fra 29 e 32 mm, e l'incrocio dei due reticoli elicoidali produceva
     #: pareti piu' sottili del passo della griglia: la superficie usciva aperta
     #: (56 spigoli con un solo triangolo). Fra i due resta 2 mm di pieno.
-    x_inizio=0.0015, x_fine=0.0265, passo_elica=0.090, velocita=3.5,
+    #: passo 125 mm: la condizione di autosostentamento e' passo >= 2 pi R
+    #: tan(alpha), e a R = 13.2 mm con 52 gradi di margine servono 106 mm.
+    x_inizio=0.0015, x_fine=0.0265, passo_elica=0.125, velocita=3.5,
 )
 
 #: Circuito GOLA + LABBRO. q = 4.65 MW/m2 ma su soli 18 mm di percorso.
@@ -51,7 +53,13 @@ GOLA = CircuitoRaffreddamento(
     parete_calda=0.8e-3, parete_fredda=1.8e-3,
     #: x_fine si ferma 0.5 mm PRIMA del labbro (x_lip = 39.7 mm): oltre, il
     #: mantello non esiste piu' e i canali finirebbero nel vuoto.
-    x_inizio=0.0305, x_fine=0.0392, passo_elica=0.035, velocita=12.0,
+    #: passo 0.125 e non 0.035: la condizione di autosostentamento di un canale
+    #: elicoidale e' passo >= 2 pi R (vedi printability.passo_elica_minimo), e a
+    #: R = 13 mm servono 82 mm. Con 35 mm il tetto dei canali era uno sbalzo a
+    #: 39 gradi su 2.65 cm2, dentro canali da 0.6 mm dove nessun supporto e'
+    #: rimovibile. A 125 mm su 9 mm di corsa i canali sono quasi assiali, che e'
+    #: poi come sono fatti i canali rigenerativi veri in gola.
+    x_inizio=0.0305, x_fine=0.0392, passo_elica=0.125, velocita=12.0,
     #: A U: l'acqua scende al labbro, gira, e torna su uno strato piu' esterno.
     #: Entrambi gli attacchi restano cosi' sulla parte cilindrica, dove un foro
     #: radiale ha senso. Verso il labbro la parete e' conica e nessuna
@@ -82,7 +90,11 @@ def punto_operativo():
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--passo", type=float, default=1.2e-4, help="passo griglia [m]")
-    ap.add_argument("--raccordo", type=float, default=1.5e-3)
+    #: 0.5 mm e non 1.5. Un raccordo e' locale solo se i due corpi distano piu'
+    #: del suo raggio: plug e labbro distano 1.78 mm, e con 1.5 mm il raccordo
+    #: li univa ATTRAVERSO la gola, strozzandola del 25 %. Nessun altro
+    #: controllo se ne accorgeva. Vedi engine.area_di_gola.
+    ap.add_argument("--raccordo", type=float, default=5.0e-4)
     ap.add_argument("--out", type=Path, default=Path("runs/motore50"))
     ap.add_argument("--backend", default="numpy")
     a = ap.parse_args()
@@ -128,6 +140,29 @@ def main() -> int:
     write_stl(vc, fc, a.out / "canali50N.stl")
     print(f"  scritto {a.out/'canali50N.stl'} ({len(fc)} triangoli): la sola rete "
           "di raffreddamento, per guardarla da sola")
+
+    print("\nSTAMPABILITA'  (costruzione lungo l'asse, in piedi sulla piastra)")
+    from zefiro.sdf.engine import area_di_gola
+    from zefiro.sdf.printability import (
+        analizza_sbalzi, polvere_evacuabile, sbalzi_interni,
+    )
+    rap = analizza_sbalzi(v, f, (1.0, 0.0, 0.0))
+    rint = sbalzi_interni(v, f, m.cavita_gas, m.canali, (1.0, 0.0, 0.0))
+    print(f"  da supportare {rap.area_da_supportare*1e4:.2f} cm2 su "
+          f"{rap.area_totale*1e4:.1f} ({rap.frazione_da_supportare:.2%}); "
+          f"appoggiati sulla piastra {rap.area_sulla_piastra*1e4:.2f} cm2")
+    print("  area rivolta in basso per fascia di angolo [cm2]: "
+          + str({k: round(x*1e4, 2) for k, x in rap.istogramma.items()}))
+    if rint is not None:
+        print(f"  DENTRO i canali, dove nessun supporto e' rimovibile: "
+              f"{rint.area_da_supportare*1e4:.2f} cm2")
+    ok_polvere, n_comp, sacche = polvere_evacuabile(m.canali, m.solido, m.grid)
+    print(f"  polvere evacuabile: {ok_polvere} ({sacche} sacche chiuse su "
+          f"{n_comp} componenti di vuoto)")
+    x_lip = d["L_c"] + d["L_conv"]
+    A, At = area_di_gola(m, x_lip, params.plug_contour_r[0], d["R_lip"])
+    print(f"  AREA DI GOLA misurata sul solido {A*1e6:.2f} mm2 contro "
+          f"{At*1e6:.2f} teorici ({A/At-1:+.1%})")
 
     print("\nRAFFREDDAMENTO (dal dimensionamento, vedi heat_map_50N.py)")
     tot = 0.0

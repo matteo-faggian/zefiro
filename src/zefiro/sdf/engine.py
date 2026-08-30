@@ -24,6 +24,7 @@ from typing import Sequence
 import numpy as np
 
 from zefiro.sdf.core import Field, Grid
+from zefiro.sdf.printability import passo_elica_minimo
 from zefiro.sdf.shapes import cylinder, helical_channels, revolve_polygon
 
 
@@ -32,6 +33,18 @@ from zefiro.sdf.shapes import cylinder, helical_channels, revolve_polygon
 #: del collettore sia molto maggiore di quella di un singolo canale, altrimenti
 #: e' il collettore a strozzare e la distribuzione fra i canali non e' uniforme.
 COLLETTORE_LARGHEZZA = 3.0e-3
+
+#: Pendenza del soffitto del collettore, in avanzamento assiale per unita' di
+#: profondita'. 1.0 darebbe esattamente 45 gradi, cioe' il limite: con la
+#: discretizzazione a voxel una parte delle faccette finiva appena sotto.
+#: 1.4 da' circa 54 gradi, cioe' margine sulla soglia di fabbricazione invece
+#: che uguaglianza con essa - come per qualunque altra tolleranza.
+COLLETTORE_PENDENZA = 1.4
+
+#: Angolo di autosostentamento richiesto in progetto, piu' severo della soglia
+#: fisica di 45 gradi. Stessa logica dello smusso: si progetta con margine
+#: sulla soglia di processo, non uguale ad essa.
+MARGINE_ANGOLO_DEG = 52.0
 
 #: Diametro dell'attacco radiale che porta l'acqua nel collettore [m].
 #: Dimensionato perche' la sua sezione superi quella di tutti i canali del ramo
@@ -195,8 +208,25 @@ def _collettore(grid, gas, mantello, c, x_centro: float, xp):
     else:
         profondita, semi = c.parete_calda + 0.5 * c.lato, 0.5 * c.lato
     radiale = xp.abs(gas.a - profondita) - semi
-    assiale = xp.abs(X - x_centro) - 0.5 * COLLETTORE_LARGHEZZA
-    a = xp.maximum(radiale, assiale)
+    # IL SOFFITTO DI UNA CAVA STA A x MAGGIORE, non minore.
+    #
+    # Costruendo lungo +x, il materiale sopra il vuoto e' quello a x piu'
+    # grande, e la sua faccia esposta guarda verso la piastra: normale -x,
+    # sbalzo. La faccia a x minore e' invece la superficie SUPERIORE del
+    # materiale sottostante, e non ha bisogno di niente.
+    #
+    # Alla prima correzione avevo smussato la faccia sbagliata, e i 2.4 cm2 di
+    # tetto piatto erano rimasti esattamente dov'erano. Il verso delle normali
+    # di marching cubes non e' un dettaglio da assumere: e' verificato su una
+    # sfera in tests/test_printability.py, dove la risposta si conosce.
+    #
+    # Il soffitto si smussa a 45 gradi facendolo arretrare man mano che si va
+    # in profondita': in sezione meridiana il collettore diventa un cuneo.
+    profondita_min = profondita - semi
+    monte = (x_centro - 0.5 * COLLETTORE_LARGHEZZA) - X
+    valle = X - (x_centro + 0.5 * COLLETTORE_LARGHEZZA
+                 - COLLETTORE_PENDENZA * (gas.a - profondita_min))
+    a = xp.maximum(radiale, xp.maximum(monte, valle))
     campo = Field(grid, xp.broadcast_to(a, grid.shape).astype(xp.float32).copy(), xp)
     return campo.intersection(mantello)
 
@@ -266,6 +296,7 @@ def costruisci(
     # Il rimedio e' dirglielo: il canale esiste solo DENTRO il mantello. Cosi'
     # il vincolo geometrico e' esplicito invece che sperato.
     canali = None
+    note_passo: list[str] = []
     for c in circuiti:
         ch = helical_channels(
             grid, gas,
@@ -275,6 +306,21 @@ def costruisci(
             x_inizio=c.x_inizio, x_fine=c.x_fine, xp=xp,
         )
         ch = ch.intersection(mantello)
+        # Il raggio che conta e' quello del CANALE, non quello esterno del
+        # pezzo: e' li' che sta la superficie da sostenere. Con il raggio
+        # esterno il controllo bocciava progetti sani.
+        prof_esterna = (c.parete_calda + c.lato + c.setto_ritorno + 0.5 * c.lato
+                        if c.ritorno else c.parete_calda + 0.5 * c.lato)
+        raggio_canale = max(_raggio_parete(d, c.x_inizio),
+                            _raggio_parete(d, c.x_fine)) + prof_esterna
+        passo_minimo = passo_elica_minimo(raggio_canale, MARGINE_ANGOLO_DEG)
+        if abs(c.passo_elica) < passo_minimo:
+            note_passo.append(
+                f"il ramo '{c.nome}' ha passo {abs(c.passo_elica)*1e3:.0f} mm contro i "
+                f"{passo_minimo*1e3:.0f} mm minimi a raggio {raggio_canale*1e3:.1f} mm "
+                f"(soglia con margine: {MARGINE_ANGOLO_DEG:.0f} gradi): il tetto dei "
+                "canali e' uno sbalzo, e dentro un canale non si possono mettere supporti"
+            )
         if c.ritorno:
             prof_rit = (c.parete_calda + c.lato + c.setto_ritorno + 0.5 * c.lato)
             rit = helical_channels(
@@ -321,7 +367,7 @@ def costruisci(
     vuoti = fori if canali is None else canali.union(fori)
 
     solido = corpo.difference(vuoti)
-    note = []
+    note = list(note_passo)
     for c in circuiti:
         sezione_canali = c.n_canali * c.lato ** 2
         sezione_porta = math.pi / 4.0 * PORTA_DIAMETRO ** 2
@@ -334,3 +380,45 @@ def costruisci(
         note.append("il solido tocca il bordo della griglia: la mesh uscira' aperta")
     return MotoreSDF(grid=grid, solido=solido, cavita_gas=gas, canali=canali,
                      vuoti=vuoti, circuiti=tuple(circuiti), note=note)
+
+
+def area_di_gola(motore: "MotoreSDF", x_gola: float, r_min: float, r_max: float,
+                 n_stazioni: int = 5) -> tuple[float, float]:
+    """Area di passaggio LIBERA misurata sul solido costruito, alla gola.
+
+    PERCHE' ESISTE. Il raccordo fra mantello e corpo centrale, impostato a
+    1.5 mm, gettava materiale dentro l'anello di gola: l'area libera usciva
+    del **12 % piu' piccola** di quella di progetto, cioe' 12 % di spinta in
+    meno. E non lo vedeva nessuno degli altri controlli - il pezzo era chiuso,
+    in un solo blocco, con il circuito sigillato e un volume del tutto
+    plausibile. Un raccordo e' un'operazione LOCALE solo se i due corpi sono
+    lontani piu' del suo raggio; qui plug e labbro distano 1.78 mm e il
+    raccordo li ha uniti attraverso il getto.
+
+    L'area di gola e' la grandezza che fissa la portata e quindi la spinta:
+    su un motore va misurata sul pezzo, non data per scontata dal disegno.
+
+    Ritorna (area_misurata, area_teorica) in m^2.
+    """
+    import numpy as np
+
+    from zefiro.sdf.core import to_numpy
+
+    g = motore.grid
+    campo = to_numpy(motore.solido.a)
+    ay, az = np.array(g.axes()[1]), np.array(g.axes()[2])
+    Y, Z = np.meshgrid(ay, az, indexing="ij")
+    R = np.hypot(Y, Z)
+    anello = (R > r_min) & (R < r_max)
+
+    # piu' stazioni attorno alla gola: il minimo e' cio' che strozza davvero
+    aree = []
+    for k in range(n_stazioni):
+        xq = x_gola - (n_stazioni - 1 - k) * g.spacing
+        i = int(round((xq - g.origin[0]) / g.spacing))
+        if not (0 <= i < g.shape[0]):
+            continue
+        aree.append(float((campo[i][anello] >= 0).sum()) * g.spacing**2)
+    misurata = min(aree) if aree else 0.0
+    teorica = math.pi * (r_max**2 - r_min**2)
+    return misurata, teorica

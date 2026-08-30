@@ -19,7 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from zefiro.geometry.parameters import default_design_vector, derive       # noqa: E402
 from zefiro.l0.cycle import evaluate_l0                                    # noqa: E402
 from zefiro.schemas import FuelSpec, OperatingPoint                        # noqa: E402
-from zefiro.sdf.engine import CircuitoRaffreddamento, costruisci           # noqa: E402
+from zefiro.sdf.clearances import MIN_WALL_SLM                          # noqa: E402
+from zefiro.sdf.engine import (                                        # noqa: E402
+    PORTE_PER_COLLETTORE, CircuitoRaffreddamento, costruisci,
+)
 from zefiro.sdf.meshing import (                                          # noqa: E402
     is_watertight, isosurface, mesh_area, mesh_volume, write_stl,
 )
@@ -34,7 +37,7 @@ P_C = P_SUP / 1.15          # entrambi i vincoli di Dp si chiudono qui
 #: 50 K di margine all'ebollizione, e la perdita di carico e' 0.1 bar.
 CAMERA = CircuitoRaffreddamento(
     nome="camera", n_canali=20, lato=1.0e-3,
-    parete_calda=1.2e-3, parete_fredda=1.0e-3,
+    parete_calda=1.2e-3, parete_fredda=1.2e-3,
     #: I due rami NON si sovrappongono. Nella prima versione si accavallavano
     #: fra 29 e 32 mm, e l'incrocio dei due reticoli elicoidali produceva
     #: pareti piu' sottili del passo della griglia: la superficie usciva aperta
@@ -50,7 +53,7 @@ CAMERA = CircuitoRaffreddamento(
 #: kW/m2K, parete calda 0.8 mm per abbassare il salto di conduzione.
 GOLA = CircuitoRaffreddamento(
     nome="gola", n_canali=18, lato=0.6e-3,
-    parete_calda=0.8e-3, parete_fredda=1.8e-3,
+    parete_calda=0.8e-3, parete_fredda=1.4e-3,
     #: x_fine si ferma 0.5 mm PRIMA del labbro (x_lip = 39.7 mm): oltre, il
     #: mantello non esiste piu' e i canali finirebbero nel vuoto.
     #: passo 0.125 e non 0.035: la condizione di autosostentamento di un canale
@@ -65,7 +68,7 @@ GOLA = CircuitoRaffreddamento(
     #: radiale ha senso. Verso il labbro la parete e' conica e nessuna
     #: profondita' di foro raggiunge il collettore senza bucare il gas.
     #: 0.8 + 0.6 + 0.4 + 0.6 + 0.8 = 3.2 mm: sta esattamente nel mantello.
-    ritorno=True, setto_ritorno=0.4e-3,
+    ritorno=True, setto_ritorno=0.6e-3, sfalsamento_ritorno=3.0e-3,
 )
 
 
@@ -156,6 +159,10 @@ def main() -> int:
     if rint is not None:
         print(f"  DENTRO i canali, dove nessun supporto e' rimovibile: "
               f"{rint.area_da_supportare*1e4:.2f} cm2")
+    from zefiro.sdf.clearances import rapporto_spessori
+    from zefiro.sdf.meshing import connected_components
+    comp = connected_components(v, f)
+    print(f"  il pezzo e' in {len(comp)} parte/i; superficie chiusa: {chiuso}")
     ok_polvere, n_comp, sacche = polvere_evacuabile(m.canali, m.solido, m.grid)
     print(f"  polvere evacuabile: {ok_polvere} ({sacche} sacche chiuse su "
           f"{n_comp} componenti di vuoto)")
@@ -163,6 +170,37 @@ def main() -> int:
     A, At = area_di_gola(m, x_lip, params.plug_contour_r[0], d["R_lip"])
     print(f"  AREA DI GOLA misurata sul solido {A*1e6:.2f} mm2 contro "
           f"{At*1e6:.2f} teorici ({A/At-1:+.1%})")
+
+    print("\nSPESSORI DI PARETE fra vuoti che NON devono comunicare")
+    import itertools
+    voluti = {("fori_iniezione", "gas")}
+    for c in m.circuiti:
+        for k in (0, 1):
+            strato = f"{c.nome}_ritorno" if (c.ritorno and k == 1) else f"{c.nome}_andata"
+            for j in range(PORTE_PER_COLLETTORE):
+                voluti.add(tuple(sorted((f"{c.nome}_attacco_{k}_{j}", strato))))
+    nomi = sorted(m.parti)
+    coppie = [(a, b, MIN_WALL_SLM) for a, b in itertools.combinations(nomi, 2)
+              if tuple(sorted((a, b))) not in voluti]
+    # Il controllo costa una trasformata di distanza per parte: su una griglia
+    # da venti milioni di voxel sono minuti. E' una verifica GEOMETRICA, e a
+    # 0.15 mm risolve gia' tutto quello che c'e' da risolvere: sopra quella
+    # soglia si dice di rifarla piu' grossa invece di far aspettare.
+    if m.grid.n_voxels > 12_000_000:
+        print(f"    saltato: griglia da {m.grid.n_voxels/1e6:.0f} Mvoxel. "
+              "Rilancia con --passo 1.6e-4 per il controllo degli spessori.")
+        return 0
+    esiti = [x for x in rapporto_spessori(m, coppie) if x.minima != float("inf")]
+    guai = [x for x in esiti if x.esito != "ok"]
+    print(f"  {len(coppie)} coppie controllate, minimo richiesto "
+          f"{MIN_WALL_SLM*1e3:.2f} mm (tolleranza = passo {m.grid.spacing*1e3:.2f} mm)")
+    if guai:
+        for x in sorted(guai, key=lambda z: z.minima)[:8]:
+            print(f"    {x.a:<24}{x.b:<24}{x.minima*1e3:7.3f} mm   {x.esito}")
+    else:
+        print("    nessuna coppia sotto il minimo")
+    print(f"  parete piu' sottile fra due vuoti: "
+          f"{min(x.minima for x in esiti)*1e3:.3f} mm")
 
     print("\nRAFFREDDAMENTO (dal dimensionamento, vedi heat_map_50N.py)")
     tot = 0.0

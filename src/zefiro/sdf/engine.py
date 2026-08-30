@@ -37,20 +37,40 @@ COLLETTORE_LARGHEZZA = 3.0e-3
 #: Pendenza del soffitto del collettore, in avanzamento assiale per unita' di
 #: profondita'. 1.0 darebbe esattamente 45 gradi, cioe' il limite: con la
 #: discretizzazione a voxel una parte delle faccette finiva appena sotto.
-#: 1.4 da' circa 54 gradi, cioe' margine sulla soglia di fabbricazione invece
-#: che uguaglianza con essa - come per qualunque altra tolleranza.
-COLLETTORE_PENDENZA = 1.4
+#: 2.4 da' circa 67 gradi sul tratto CILINDRICO. Serve tutto quel margine
+#: perche' lo smusso e' definito rispetto alla NORMALE alla parete, e sul
+#: convergente la normale e' gia' inclinata di 37 gradi rispetto all'asse:
+#: quel che sul cilindro sono 67 gradi, sul cono ne diventa una trentina.
+#: Con 1.4 (54 gradi sul cilindro) i collettori sul cono finivano sotto
+#: soglia, e sono tre su sei.
+COLLETTORE_PENDENZA = 3.2
 
 #: Angolo di autosostentamento richiesto in progetto, piu' severo della soglia
 #: fisica di 45 gradi. Stessa logica dello smusso: si progetta con margine
 #: sulla soglia di processo, non uguale ad essa.
 MARGINE_ANGOLO_DEG = 52.0
 
-#: Diametro dell'attacco radiale che porta l'acqua nel collettore [m].
-#: Dimensionato perche' la sua sezione superi quella di tutti i canali del ramo
-#: messi insieme: se strozzasse li', la portata la deciderebbe l'attacco e non
-#: il progetto dei canali.
-PORTA_DIAMETRO = 5.6e-3
+#: Diametro dell'attacco radiale [m] e quanti attacchi per collettore.
+#:
+#: TRE attacchi da 3.2 mm invece di uno da 5.6. Stessa sezione complessiva
+#: (24 contro 25 mm2), ma tre vantaggi che uno solo non da':
+#:   * un foro orizzontale di 5.6 mm ha una calotta superiore che in SLM cede;
+#:     3.2 mm e' una luce che il processo attraversa senza supporti;
+#:   * su un motore lungo 47 mm due attacchi da 5.6 mm posti a 4 mm di distanza
+#:     SI COMPENETRANO, e i due rami paralleli del raffreddamento diventano uno
+#:     solo. Con attacchi piccoli e sfalsati angolarmente il problema sparisce;
+#:   * tre ingressi a 120 gradi distribuiscono l'acqua nel collettore meglio di
+#:     uno solo, che alimenterebbe di piu' i canali che gli stanno davanti.
+PORTA_DIAMETRO = 3.2e-3
+PORTE_PER_COLLETTORE = 3
+
+#: Sfasamento angolare fra collettori consecutivi, in frazione del passo fra
+#: attacchi dello stesso collettore. Serve a garantire che due collettori
+#: vicini in x non abbiano MAI attacchi allineati.
+SFALSAMENTO_COLLETTORI = 0.5
+
+#: Quanto il collettore e' piu' profondo, per lato, dei canali che unisce [m].
+COLLETTORE_MARGINE = 1.5e-4
 
 
 @dataclass(frozen=True)
@@ -77,7 +97,18 @@ class CircuitoRaffreddamento:
     #: bucava. Con la U il problema sparisce, perche' gli attacchi tornano
     #: sulla parte cilindrica.
     ritorno: bool = False
-    setto_ritorno: float = 0.4e-3   # m, pieno fra andata e ritorno
+    #: Pieno fra lo strato di andata e quello di ritorno. 0.6 mm e non 0.4:
+    #: 0.4 sta sotto il minimo di parete dichiarato per l'SLM, e una parete
+    #: sotto il minimo non e' sottile, e' porosa - cioe' i due strati
+    #: comunicano e il circuito si cortocircuita da solo.
+    setto_ritorno: float = 0.6e-3
+    #: Di quanto lo strato di RITORNO parte piu' a valle di quello di andata.
+    #: Non e' un dettaglio: l'attacco che alimenta lo strato interno (andata)
+    #: arriva da fuori e dovrebbe attraversare quello esterno (ritorno),
+    #: mettendoli in comunicazione. Facendo partire il ritorno piu' a valle si
+    #: lascia un tratto in cui lo strato esterno NON c'e', e li' si mette
+    #: l'attacco dell'andata.
+    sfalsamento_ritorno: float = 3.0e-3
 
 
 @dataclass
@@ -89,6 +120,10 @@ class MotoreSDF:
     canali: Field
     vuoti: Field          # canali + fori d'iniezione + attacchi: TUTTO il vuoto
     circuiti: tuple[CircuitoRaffreddamento, ...]
+    #: I vuoti tenuti SEPARATI, per poter misurare gli spessori di parete
+    #: a coppie. Un unico campo unito direbbe solo che il pezzo e' chiuso,
+    #: non quanto materiale resta fra due cavita' che non devono toccarsi.
+    parti: dict = dc_field(default_factory=dict)
     note: list[str] = dc_field(default_factory=list)
 
 
@@ -194,20 +229,29 @@ def _porta_acqua(grid, x_centro, r_esterno_locale, penetrazione, raggio_foro,
                               sporgenza + penetrazione, xp)
 
 
-def _collettore(grid, gas, mantello, c, x_centro: float, xp):
+def _collettore(grid, gas, mantello, c, x_centro: float, xp,
+                strato: str = "andata"):
     """Gola anulare che raccoglie tutti i canali di un ramo, alla stessa
     profondita' dei canali. E' l'elemento che rende il circuito un circuito."""
     X, _, _ = grid.coords(xp)
     # Con la U il collettore deve unire ANCHE lo strato di ritorno, quindi si
     # estende in profondita' fino a coprirli entrambi.
-    if c.ritorno:
-        prof_rit = c.parete_calda + c.lato + c.setto_ritorno + 0.5 * c.lato
-        centro = 0.5 * (c.parete_calda + 0.5 * c.lato + prof_rit)
-        mezza = 0.5 * (prof_rit - (c.parete_calda + 0.5 * c.lato)) + 0.5 * c.lato
-        profondita, semi = centro, mezza
+    prof_and = c.parete_calda + 0.5 * c.lato
+    prof_rit = c.parete_calda + c.lato + c.setto_ritorno + 0.5 * c.lato
+    if strato == "andata":
+        profondita, semi = prof_and, 0.5 * c.lato
+    elif strato == "ritorno":
+        profondita, semi = prof_rit, 0.5 * c.lato
+    elif strato == "entrambi":
+        profondita = 0.5 * (prof_and + prof_rit)
+        semi = 0.5 * (prof_rit - prof_and) + 0.5 * c.lato
     else:
-        profondita, semi = c.parete_calda + 0.5 * c.lato, 0.5 * c.lato
-    radiale = xp.abs(gas.a - profondita) - semi
+        raise ValueError(f"strato {strato!r} sconosciuto")
+    # Il collettore e' leggermente PIU' PROFONDO dei canali che unisce, cosi'
+    # la banda del canale ci sta dentro tutta e i due bordi non si incontrano
+    # tangenti. All'incrocio tangente marching cubes lasciava sacche di vuoto
+    # chiuse da un voxel: polvere che non esce.
+    radiale = xp.abs(gas.a - profondita) - (semi + COLLETTORE_MARGINE)
     # IL SOFFITTO DI UNA CAVA STA A x MAGGIORE, non minore.
     #
     # Costruendo lungo +x, il materiale sopra il vuoto e' quello a x piu'
@@ -222,7 +266,10 @@ def _collettore(grid, gas, mantello, c, x_centro: float, xp):
     #
     # Il soffitto si smussa a 45 gradi facendolo arretrare man mano che si va
     # in profondita': in sezione meridiana il collettore diventa un cuneo.
-    profondita_min = profondita - semi
+    # il riferimento dello smusso deve essere il bordo VERO del collettore,
+    # margine compreso: usando quello nominale lo smusso partiva un margine
+    # piu' in la' e il primo tratto di soffitto restava piatto.
+    profondita_min = profondita - semi - COLLETTORE_MARGINE
     monte = (x_centro - 0.5 * COLLETTORE_LARGHEZZA) - X
     valle = X - (x_centro + 0.5 * COLLETTORE_LARGHEZZA
                  - COLLETTORE_PENDENZA * (gas.a - profondita_min))
@@ -296,6 +343,7 @@ def costruisci(
     # Il rimedio e' dirglielo: il canale esiste solo DENTRO il mantello. Cosi'
     # il vincolo geometrico e' esplicito invece che sperato.
     canali = None
+    parti: dict = {}
     note_passo: list[str] = []
     for c in circuiti:
         ch = helical_channels(
@@ -306,6 +354,7 @@ def costruisci(
             x_inizio=c.x_inizio, x_fine=c.x_fine, xp=xp,
         )
         ch = ch.intersection(mantello)
+        parti[f"{c.nome}_andata"] = ch
         # Il raggio che conta e' quello del CANALE, non quello esterno del
         # pezzo: e' li' che sta la superficie da sostenere. Con il raggio
         # esterno il controllo bocciava progetti sani.
@@ -326,15 +375,36 @@ def costruisci(
             rit = helical_channels(
                 grid, gas, profondita=prof_rit,
                 larghezza=c.lato, altezza=c.lato,
-                n_canali=c.n_canali, passo=-c.passo_elica,
-                x_inizio=c.x_inizio, x_fine=c.x_fine, xp=xp,
+                # STESSO passo, non opposto. Con eliche controrotanti andata e
+                # ritorno si incrociano, e a ogni incrocio il setto fra i due
+                # strati si riduce a una lamella: marching cubes vi lasciava
+                # 116 isole di materiale da un voxel, cioe' polvere sinterizzata
+                # che si stacca. Concordi, il ritorno corre esattamente sopra
+                # l'andata e il setto resta spesso uguale ovunque.
+                n_canali=c.n_canali, passo=c.passo_elica,
+                x_inizio=c.x_inizio + c.sfalsamento_ritorno, x_fine=c.x_fine, xp=xp,
             ).intersection(mantello)
+            parti[f"{c.nome}_ritorno"] = rit
             ch = ch.union(rit)
-        # collettori: due gole anulari che uniscono tutti i canali del ramo.
-        # Senza, i canali non sono collegati a nulla e il pezzo non e' un
-        # circuito ma una serie di buchi ciechi.
-        for x_col in (c.x_inizio, c.x_fine):
-            ch = ch.union(_collettore(grid, gas, mantello, c, x_col, xp))
+        # Collettori. Per un circuito a U ne servono TRE, non due:
+        #   * a x_inizio, alla profondita' della sola ANDATA;
+        #   * a x_inizio + sfalsamento, alla profondita' del solo RITORNO;
+        #   * a x_fine, che li unisce entrambi ed e' l'inversione a U.
+        # Con un collettore unico a monte, che li univa tutti e due, l'acqua
+        # entrava da un attacco e usciva dall'altro senza passare per i canali:
+        # un cortocircuito idraulico invisibile in ogni vista.
+        if c.ritorno:
+            ch = ch.union(_collettore(grid, gas, mantello, c, c.x_inizio, xp,
+                                      strato="andata"))
+            ch = ch.union(_collettore(grid, gas, mantello, c,
+                                      c.x_inizio + c.sfalsamento_ritorno, xp,
+                                      strato="ritorno"))
+            ch = ch.union(_collettore(grid, gas, mantello, c, c.x_fine, xp,
+                                      strato="entrambi"))
+        else:
+            for x_col in (c.x_inizio, c.x_fine):
+                ch = ch.union(_collettore(grid, gas, mantello, c, x_col, xp,
+                                          strato="andata"))
         canali = ch if canali is None else canali.union(ch)
 
     # --- attacchi dell'acqua ------------------------------------------------ #
@@ -342,44 +412,106 @@ def costruisci(
     # sottostare alla stessa verifica: un attacco che buca la parete sprizza
     # acqua nel gas esattamente come un canale. La prima versione li teneva
     # fuori dal controllo, e l'attacco di uscita del ramo gola bucava davvero.
-    for c in circuiti:
-        prof_col = c.parete_calda + 0.5 * c.lato      # profondita' del collettore
-        # con la U entrambi gli attacchi stanno a monte, sulla parte cilindrica
-        stazioni = (c.x_inizio, c.x_inizio) if c.ritorno else (c.x_inizio, c.x_fine)
-        for k, x_col in enumerate(stazioni):
-            r_est = _raggio_parete(d, x_col) + t_max
-            # si ferma appena dentro il bordo INTERNO del collettore, che sta a
-            # (prof_col - lato/2) dalla parete calda. Andare oltre non serve a
-            # niente e mangia la parete: sul ramo gola arrivava a 0.18 mm dal gas.
-            prof_max = (c.parete_calda + c.lato + c.setto_ritorno + c.lato
-                        if c.ritorno else prof_col + 0.5 * c.lato)
-            penetrazione = t_max - prof_max + grid.spacing
-            angolo = math.pi * k                     # i due attacchi opposti
-            porta = _porta_acqua(grid, x_col, r_est, penetrazione,
-                                 0.5 * PORTA_DIAMETRO, 3.0 * grid.spacing, xp,
-                                 angolo=angolo)
-            canali = porta if canali is None else canali.union(porta)
+    for i_c, c in enumerate(circuiti):
+        prof_and = c.parete_calda + 0.5 * c.lato
+        prof_rit = c.parete_calda + c.lato + c.setto_ritorno + 0.5 * c.lato
+        if c.ritorno:
+            # L'attacco dell'ANDATA sta a x_inizio, dove lo strato di ritorno
+            # non e' ancora cominciato: cosi' non lo attraversa e i due strati
+            # restano separati. Quello del RITORNO sta piu' a valle e penetra
+            # solo fino allo strato esterno.
+            stazioni = [(c.x_inizio, prof_and),
+                        (c.x_inizio + c.sfalsamento_ritorno, prof_rit)]
+        else:
+            stazioni = [(c.x_inizio, prof_and), (c.x_fine, prof_and)]
+
+        for k, (x_col, prof) in enumerate(stazioni):
+            # r_est generoso: con il taglio sul campo, partire piu' fuori del
+            # necessario non fa danno, mentre partire troppo dentro si'.
+            r_est = _raggio_parete(d, x_col) + 1.4 * t_max
+            penetrazione = 1.4 * t_max - prof + 0.5 * c.lato + grid.spacing
+            # Gli attacchi di collettori consecutivi sono SFALSATI: due
+            # collettori vicini in x, con attacchi allineati, si compenetrano.
+            # Su questo motore succedeva davvero fra l'uscita della camera e
+            # l'ingresso della gola, a 4 mm di distanza con fori da 5.6 mm: i
+            # due rami paralleli diventavano un ramo solo.
+            base = (2.0 * math.pi / PORTE_PER_COLLETTORE) * SFALSAMENTO_COLLETTORI \
+                * (2 * i_c + k)
+            # L'attacco viene TAGLIATO CON IL CAMPO alla profondita' del suo
+            # strato, invece di fidarsi della lunghezza calcolata.
+            #
+            # Il motivo e' che su una parete CONICA la distanza radiale non e'
+            # quella normale: a 37 gradi di semiapertura, 4 mm di parete misurati
+            # normalmente sono 5 mm misurati in raggio. L'attacco partiva percio'
+            # un millimetro DENTRO il materiale e sfondava di altrettanto,
+            # arrivando nello strato di andata e cortocircuitando la U.
+            # Tagliandolo col campo, si ferma alla profondita' giusta su
+            # qualunque forma di parete, cono o cilindro che sia.
+            # ATTENZIONE AL VERSO: `gas.a` e' la profondita' misurata DALLA
+            # parete verso l'esterno, quindi cresce allontanandosi dal gas.
+            # L'attacco arriva da fuori (profondita' grande) e scende: per
+            # fermarlo al proprio strato si tiene `gas.a >= limite`, non <=.
+            # Con il verso sbagliato il taglio teneva proprio la parte che
+            # doveva togliere, e l'attacco del ritorno continuava a sfondare
+            # nello strato di andata.
+            limite = prof - 0.5 * c.lato
+            clip = Field(grid, xp.broadcast_to(limite - gas.a, grid.shape)
+                         .astype(xp.float32).copy(), xp)
+            for j in range(PORTE_PER_COLLETTORE):
+                angolo = base + 2.0 * math.pi * j / PORTE_PER_COLLETTORE
+                porta = _porta_acqua(grid, x_col, r_est, penetrazione,
+                                     0.5 * PORTA_DIAMETRO, 3.0 * grid.spacing, xp,
+                                     angolo=angolo).intersection(clip)
+                parti[f"{c.nome}_attacco_{k}_{j}"] = porta
+                canali = porta if canali is None else canali.union(porta)
 
     # --- fori d'iniezione ---------------------------------------------------- #
     # Questi SI' devono aprirsi in camera: e' la loro funzione. Restano quindi
     # fuori dal controllo di tenuta, e in un campo separato per non confonderli.
     fori = _fori_iniezione(grid, d, t_face, xp)
+    parti["fori_iniezione"] = fori
+    parti["gas"] = gas
     vuoti = fori if canali is None else canali.union(fori)
 
     solido = corpo.difference(vuoti)
+
+    # Sacche di vuoto chiuse piu' piccole di un cubo da mezzo millimetro:
+    # artefatti degli spigoli acuti, si riempiono. Le piu' grandi restano e
+    # vengono segnalate, perche' quelle sono errori di progetto.
+    from zefiro.sdf.printability import isole_di_materiale, riempi_sacche_chiuse
+    solido, n_riempite, vol_riempito, n_rimaste = riempi_sacche_chiuse(
+        solido, volume_massimo=(5.0e-4) ** 3)
+    # e, simmetricamente, le isole di MATERIALE staccate: frammenti
+    # sinterizzati che si staccano e girano nel circuito finche' non
+    # ostruiscono un canale da 0.6 mm.
+    solido, n_isole, vol_isole = isole_di_materiale(
+        solido, volume_minimo=(5.0e-4) ** 3)
+
     note = list(note_passo)
+    if n_rimaste:
+        note.append(
+            f"{n_rimaste} sacche di vuoto CHIUSE sopra la soglia: polvere che non "
+            "esce dal pezzo. Vanno collegate a un percorso di scarico o eliminate.")
     for c in circuiti:
         sezione_canali = c.n_canali * c.lato ** 2
-        sezione_porta = math.pi / 4.0 * PORTA_DIAMETRO ** 2
-        if sezione_porta < sezione_canali:
+        sezione_porte = PORTE_PER_COLLETTORE * math.pi / 4.0 * PORTA_DIAMETRO ** 2
+        if sezione_porte < sezione_canali:
             note.append(
-                f"l'attacco del ramo '{c.nome}' ({sezione_porta*1e6:.2f} mm2) e' piu' "
-                f"stretto della somma dei suoi canali ({sezione_canali*1e6:.2f} mm2): "
-                "sarebbe l'attacco a decidere la portata")
+                f"gli attacchi del ramo '{c.nome}' ({sezione_porte*1e6:.2f} mm2 in "
+                f"{PORTE_PER_COLLETTORE}) sono piu' stretti della somma dei suoi canali "
+                f"({sezione_canali*1e6:.2f} mm2): sarebbero gli attacchi a decidere la portata")
     if solido.tocca_il_bordo():
         note.append("il solido tocca il bordo della griglia: la mesh uscira' aperta")
+    if n_isole:
+        note.append(
+            f"tolte {n_isole} isole di materiale staccate ({vol_isole*1e9:.3f} mm3): "
+            "frammenti che si staccherebbero nel circuito")
+    if n_riempite:
+        note.append(
+            f"riempite {n_riempite} sacche minuscole ({vol_riempito*1e9:.3f} mm3 "
+            f"in tutto, {vol_riempito/max(solido.volume(), 1e-30):.1e} del pezzo)")
     return MotoreSDF(grid=grid, solido=solido, cavita_gas=gas, canali=canali,
-                     vuoti=vuoti, circuiti=tuple(circuiti), note=note)
+                     vuoti=vuoti, parti=parti, circuiti=tuple(circuiti), note=note)
 
 
 def area_di_gola(motore: "MotoreSDF", x_gola: float, r_min: float, r_max: float,

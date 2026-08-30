@@ -1368,6 +1368,82 @@ per buona dal disegno. Con il raccordo a 0.5 mm lo scarto residuo e' −1.2 % e
 **converge raffinando la griglia** (−4.7 % a 0.20 mm, −1.2 % a 0.13 mm), quindi
 e' discretizzazione e non materiale.
 
+### 8quinquies.8 Compenetrazioni e spessori: la domanda vera dell'SLM
+
+"E' chiuso?" non basta. Un pezzo puo' essere chiuso, in un blocco solo, con il
+circuito sigillato, e avere un setto da 0.15 mm che in stampa esce poroso.
+La domanda giusta e' **quanto materiale resta fra due cavita' che non devono
+comunicare**, e si misura (`sdf/clearances.py`): per due insiemi disgiunti A e
+B la distanza minima e' `min(d_A + d_B)`, con le trasformate di distanza
+esatte di scipy sulle maschere, non sui campi SDF approssimati.
+
+Su 123 coppie di vuoti sono emersi **due difetti idraulici**, entrambi
+invisibili a ogni altra verifica:
+
+1. **Cortocircuito nel circuito a U.** I due attacchi aprivano nello STESSO
+   collettore di monte: l'acqua entrava da uno e usciva dall'altro **senza
+   passare per i canali**. Il pezzo era perfetto sotto ogni altro aspetto e non
+   raffreddava niente. Ora i collettori a monte sono due, a profondita' e
+   quote diverse: uno per l'andata, uno per il ritorno, piu' l'inversione a
+   valle.
+2. **Attacchi che si compenetrano.** L'uscita della camera (x 23.8-29.2) e
+   l'ingresso della gola (x 27.8-33.2) si sovrapponevano: due fori da 5.6 mm a
+   4 mm di distanza. I due rami *paralleli* del raffreddamento diventavano un
+   ramo solo, e tutto il ragionamento sulla perdita di carico cadeva.
+
+**Da uno a tre attacchi.** Tre fori da 3.2 mm invece di uno da 5.6: stessa
+sezione (24 contro 25 mm²) ma un foro da 3.2 mm si auto-sostiene in SLM,
+sta in un motore lungo 47 mm senza toccare il vicino, e tre ingressi a 120
+gradi distribuiscono l'acqua meglio di uno. In piu' i collettori consecutivi
+hanno gli attacchi **sfalsati angolarmente**, cosi' due collettori vicini in x
+non possono allinearsi.
+
+**Il verso della profondita'.** `gas.a` cresce allontanandosi dalla parete,
+quindi per fermare un attacco al proprio strato si tiene `gas.a >= limite`,
+non `<=`. Col verso invertito il taglio conservava proprio la parte da
+togliere. E su parete **conica** la distanza radiale non e' quella normale:
+a 37 gradi di semiapertura, 4 mm di parete misurati normalmente sono 5 mm
+misurati in raggio, e l'attacco partiva un millimetro dentro il materiale
+sfondando di altrettanto. Ora l'attacco viene **tagliato con il campo stesso**,
+e si ferma alla profondita' giusta su qualunque forma di parete.
+
+### 8quinquies.9 Polvere intrappolata e frammenti staccati
+
+Due difetti speculari, entrambi tipici della geometria implicita e fatali in SLM:
+
+* una **sacca di vuoto chiusa** e' polvere che non esce con nessun lavaggio;
+* un'**isola di materiale** e' un frammento sinterizzato che si stacca.
+
+Dentro un circuito con canali da 0.6 mm, entrambi finiscono per ostruirlo.
+
+Ne sono emerse **121 sacche** e alcune decine di isole, tutte allo stesso
+punto: dove il collettore incrocia di sbieco i canali elicoidali. Che fossero
+artefatti della discretizzazione e non cavita' vere si e' visto dal fatto che
+**il loro volume dimezza raffinando la griglia** (1.24 mm³ a 0.18 mm, 0.59 a
+0.13). Si riempiono e si tolgono automaticamente sotto una soglia dichiarata
+(un cubo da mezzo millimetro); sopra restano e vengono **segnalate**, perche'
+una sacca grande e' un errore di progetto da capire, non da nascondere.
+L'incrocio e' stato reso meno acuto dando al collettore un margine radiale.
+
+**Stato finale del pezzo** (griglia 0.13 mm):
+
+| | |
+|---|---|
+| parti | **1**, superficie chiusa |
+| sacche di polvere | **0** |
+| isole di materiale | **0** |
+| parete piu' sottile fra due vuoti | **0.61 mm** (minimo dichiarato 0.50) |
+| compenetrazioni su 123 coppie | **0** |
+| area di gola | **-1.6 %** (discretizzazione, converge) |
+| sbalzi dentro i canali | 3.36 cm² su 143 (2.35 %), di cui 0.27 a tetto piatto |
+| massa | 109 g |
+
+Restano quei 3.36 cm² fra 30 e 45 gradi, per lo piu' sui collettori che stanno
+sul tratto **conico**: li' lo smusso e' definito rispetto alla normale alla
+parete, che e' gia' inclinata di 37 gradi, e recuperare gli ultimi gradi costa
+massa senza guadagnare molto (pendenza 1.4 -> 3.2 porta gli sbalzi da 4.05 a
+3.20 cm² e aggiunge 3 g). E' un compromesso, dichiarato.
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |

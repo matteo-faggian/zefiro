@@ -113,12 +113,14 @@ def test_la_sezione_dei_canali_e_quella_progettata(motore):
 def test_il_collettore_non_puo_strozzare():
     """Se l'attacco e' piu' stretto della somma dei canali, la portata la
     decide l'attacco e non il progetto. Il costruttore deve dirlo."""
-    from zefiro.sdf.engine import PORTA_DIAMETRO
     from build_50N import CAMERA, GOLA
-    sezione_porta = math.pi / 4.0 * PORTA_DIAMETRO**2
+    from zefiro.sdf.engine import PORTA_DIAMETRO, PORTE_PER_COLLETTORE
+
+    # Sono TRE attacchi per collettore, non uno: conta la loro somma.
+    sezione = PORTE_PER_COLLETTORE * math.pi / 4.0 * PORTA_DIAMETRO**2
     for c in (CAMERA, GOLA):
-        assert sezione_porta >= c.n_canali * c.lato**2, (
-            f"attacco {sezione_porta*1e6:.2f} mm2 contro canali "
+        assert sezione >= c.n_canali * c.lato**2, (
+            f"attacchi {sezione*1e6:.2f} mm2 contro canali "
             f"{c.n_canali*c.lato**2*1e6:.2f} mm2 sul ramo {c.nome}")
 
 
@@ -146,3 +148,59 @@ def test_la_gola_non_e_strozzata_dal_raccordo(motore):
         f"area di gola {misurata*1e6:.2f} mm2 contro {teorica*1e6:.2f} attesa "
         f"({misurata/teorica-1:+.1%}): qualcosa ostruisce il passaggio"
     )
+
+
+@pytest.mark.slow
+def test_nessun_vuoto_comunica_con_un_altro_che_non_deve(motore):
+    """Il controllo che chiude il cerchio in ottica SLM: fra due cavita' che
+    non devono comunicare deve restare materiale, e sopra il minimo di processo.
+
+    Due difetti veri trovati cosi', entrambi invisibili in ogni altra verifica:
+      * i due attacchi del circuito a U aprivano nello STESSO collettore, quindi
+        l'acqua entrava e usciva senza passare per i canali - un cortocircuito;
+      * l'attacco d'uscita della camera e quello d'ingresso della gola, a 4 mm
+        di distanza con fori da 5.6 mm, si compenetravano: i due rami paralleli
+        del raffreddamento diventavano un ramo solo.
+    """
+    import itertools
+
+    from zefiro.sdf.clearances import MIN_WALL_SLM, rapporto_spessori
+    from zefiro.sdf.engine import PORTE_PER_COLLETTORE
+
+    _, _, m = motore
+    # connessioni VOLUTE: i fori d'iniezione si aprono in camera (e' la loro
+    # funzione), e ogni attacco si apre nel proprio strato
+    voluti = {("fori_iniezione", "gas")}
+    for c in m.circuiti:
+        for k in (0, 1):
+            strato = f"{c.nome}_ritorno" if (c.ritorno and k == 1) else f"{c.nome}_andata"
+            for j in range(PORTE_PER_COLLETTORE):
+                voluti.add(tuple(sorted((f"{c.nome}_attacco_{k}_{j}", strato))))
+
+    nomi = sorted(m.parti)
+    coppie = [(a, b, MIN_WALL_SLM) for a, b in itertools.combinations(nomi, 2)
+              if tuple(sorted((a, b))) not in voluti]
+    assert len(coppie) > 50, "il motore non ha esposto le sue parti"
+
+    esiti = [x for x in rapporto_spessori(m, coppie) if x.minima != float("inf")]
+    compenetrano = [x for x in esiti if x.esito == "COMPENETRANO"]
+    assert not compenetrano, [
+        f"{x.a}<->{x.b}" for x in compenetrano]
+    # nessuna parete sotto il minimo, al netto della tolleranza di griglia
+    sotto = [x for x in esiti if x.esito == "SOTTO IL MINIMO"]
+    assert not sotto, [f"{x.a}<->{x.b} = {x.minima*1e3:.3f} mm" for x in sotto]
+
+
+@pytest.mark.slow
+def test_niente_polvere_intrappolata_ne_frammenti(motore):
+    """Due difetti SLM speculari: una sacca di vuoto chiusa e' polvere che non
+    esce; un'isola di materiale e' un frammento che si stacca. Nel circuito di
+    raffreddamento entrambi finiscono per ostruire un canale da 0.6 mm."""
+    from zefiro.sdf.meshing import connected_components, isosurface
+    from zefiro.sdf.printability import polvere_evacuabile
+
+    _, _, m = motore
+    ok, _, sacche = polvere_evacuabile(m.canali, m.solido, m.grid)
+    assert ok, f"{sacche} sacche di vuoto chiuse: polvere che non esce"
+    v, f = isosurface(m.solido)
+    assert len(connected_components(v, f)) == 1

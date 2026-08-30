@@ -180,3 +180,88 @@ def polvere_evacuabile(campo_canali, campo_solido, grid) -> tuple[bool, int, int
     componenti_canale.discard(0)
     sacche = sorted(componenti_canale - {esterno})
     return (not sacche), int(n), len(sacche)
+
+
+def isole_di_materiale(campo_solido, volume_minimo: float = 0.0):
+    """Trova (e opzionalmente elimina) le isole di materiale staccate.
+
+    Un'isola e' materiale sinterizzato che non e' collegato al pezzo: in SLM
+    non e' un dettaglio estetico, e' un frammento che si stacca. Dentro un
+    circuito di raffreddamento diventa un corpo libero che gira con l'acqua
+    finche' non ostruisce un canale da 0.6 mm.
+
+    Nascono facilmente in geometria implicita, dove basta che due operazioni
+    booleane lascino una lamella piu' sottile del passo di griglia.
+
+    Ritorna (campo_pulito, n_isole, volume_isole). Le isole piu' piccole di
+    `volume_minimo` vengono rimosse dal campo; le altre restano, perche' un
+    frammento grande e' un errore di progetto da capire, non da nascondere.
+    """
+    from scipy import ndimage
+
+    from zefiro.sdf.core import Field, to_numpy
+
+    a = to_numpy(campo_solido.a).copy()
+    materiale = a < 0
+    etichette, n = ndimage.label(materiale)
+    if n <= 1:
+        return campo_solido, 0, 0.0
+
+    conte = np.bincount(etichette.ravel())
+    conte[0] = 0
+    principale = int(np.argmax(conte))
+    passo = campo_solido.grid.spacing
+    n_isole = 0
+    volume = 0.0
+    for k in range(1, n + 1):
+        if k == principale or conte[k] == 0:
+            continue
+        v = conte[k] * passo**3
+        n_isole += 1
+        volume += v
+        if v <= volume_minimo:
+            a[etichette == k] = abs(a[etichette == k]) + passo
+    return Field(campo_solido.grid, a, campo_solido.xp), n_isole, volume
+
+
+def riempi_sacche_chiuse(campo_solido, volume_massimo: float):
+    """Riempie di materiale le sacche di vuoto CHIUSE piu' piccole di una soglia.
+
+    Una sacca chiusa e' polvere che non esce. Quando nasce dove due superfici
+    si incontrano ad angolo acuto - il caso tipico e' il collettore che
+    incrocia di sbieco i canali - e' un artefatto della discretizzazione, e si
+    riconosce dal fatto che il suo volume DIMEZZA raffinando la griglia. Una
+    sacca vera resta li'.
+
+    Riempirle non e' nascondere il problema: e' cio' che fa il materiale reale,
+    dove quello spigolo semplicemente si chiude. Ma la soglia e' esplicita, e
+    le sacche piu' grandi restano - quelle sono errori di progetto.
+
+    Ritorna (campo, n_riempite, volume_riempito, n_rimaste).
+    """
+    from scipy import ndimage
+
+    from zefiro.sdf.core import Field, to_numpy
+
+    a = to_numpy(campo_solido.a).copy()
+    passo = campo_solido.grid.spacing
+    etichette, n = ndimage.label(a >= 0)
+    if n <= 1:
+        return campo_solido, 0, 0.0, 0
+    esterno = etichette[0, 0, 0]
+    conte = np.bincount(etichette.ravel())
+    riempite = 0
+    volume = 0.0
+    rimaste = 0
+    for k in range(1, n + 1):
+        if k == esterno or conte[k] == 0:
+            continue
+        v = conte[k] * passo**3
+        if v <= volume_massimo:
+            m = etichette == k
+            a[m] = -(np.abs(a[m]) + passo)
+            riempite += 1
+            volume += v
+        else:
+            rimaste += 1
+    return Field(campo_solido.grid, a, campo_solido.xp), riempite, volume, rimaste

@@ -22,7 +22,38 @@ from zefiro.sdf.meshing import (                                  # noqa: E402
     mesh_volume,
 )
 
-PASSO = 2.4e-4          # grossa: i test devono girare in tempi umani
+#: 0.13 mm, non 0.24. Il setto fra andata e ritorno e' 0.6 mm: a 0.24 mm sono
+#: due voxel e mezzo, e la mesh si frantuma - non perche' il pezzo sia
+#: sbagliato, ma perche' la griglia non lo risolve. Il fatto che serva 0.13 mm
+#: per modellare queste quote e' esso stesso un'informazione di progetto: sono
+#: quote al limite anche per il processo.
+#: 0.13 mm: sotto questa finezza il pezzo si frantuma nel MODELLO, perche' i
+#: setti da 0.6 mm sono meno di quattro voxel. Non e' un difetto del controllo:
+#: e' la prova che quelle quote sono al limite anche per il processo.
+#: Serve ~4 GB: in un container piccolo la suite intera va in OOM.
+PASSO = 1.3e-4
+
+#: Memoria necessaria, misurata: la griglia a 0.13 mm e' ~22 Mvoxel e il
+#: costruttore tiene in vita una decina di campi float32, cioe' ~1 GB, piu' la
+#: mesh e le trasformate di distanza. Sotto ~6 GB liberi il processo viene
+#: ucciso a meta'. Meglio saltare dichiarandolo che finire in OOM e far
+#: sembrare che la suite sia passata.
+def _memoria_sufficiente(minimo_gb: float = 12.0) -> bool:
+    try:
+        with open("/proc/meminfo") as fh:
+            for riga in fh:
+                if riga.startswith("MemAvailable:"):
+                    return int(riga.split()[1]) / 1024**2 >= minimo_gb
+    except OSError:
+        pass
+    return True
+
+
+pesante = pytest.mark.skipif(
+    not _memoria_sufficiente(),
+    reason="serve almeno 12 GB liberi: la griglia a 0.13 mm che risolve setti "
+           "da 0.6 mm non ci sta in meno",
+)
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +65,7 @@ def motore():
     return params, l0, m
 
 
+@pesante
 @pytest.mark.slow
 def test_e_un_pezzo_solo_e_chiuso(motore):
     """Due difetti in un test, perche' si presentano insieme.
@@ -53,6 +85,7 @@ def test_e_un_pezzo_solo_e_chiuso(motore):
     assert is_watertight(f), "superficie aperta: non stampabile"
 
 
+@pesante
 @pytest.mark.slow
 def test_i_canali_non_sbucano_nel_gas(motore):
     """Un canale che sbuca in camera scarica acqua nel gas. E' il modo piu'
@@ -62,6 +95,7 @@ def test_i_canali_non_sbucano_nel_gas(motore):
     assert chiusa, f"il {frazione:.2%} del volume dei canali sbuca nella cavita' gassosa"
 
 
+@pesante
 @pytest.mark.slow
 def test_i_canali_non_svuotano_il_corpo_centrale(motore):
     """La condizione |G - profondita| <= h/2 e' soddisfatta su ENTRAMBI i lati
@@ -82,6 +116,7 @@ def test_i_canali_non_svuotano_il_corpo_centrale(motore):
     )
 
 
+@pesante
 @pytest.mark.slow
 def test_il_volume_dal_campo_e_quello_dalla_mesh(motore):
     """Due misure indipendenti: conteggio sub-voxel del campo contro il
@@ -91,6 +126,7 @@ def test_il_volume_dal_campo_e_quello_dalla_mesh(motore):
     assert mesh_volume(v, f) == pytest.approx(m.solido.volume(), rel=0.02)
 
 
+@pesante
 @pytest.mark.slow
 def test_la_sezione_dei_canali_e_quella_progettata(motore):
     """Il volume dei canali deve corrispondere a sezione x lunghezza: se il
@@ -124,6 +160,7 @@ def test_il_collettore_non_puo_strozzare():
             f"{c.n_canali*c.lato**2*1e6:.2f} mm2 sul ramo {c.nome}")
 
 
+@pesante
 @pytest.mark.slow
 def test_la_gola_non_e_strozzata_dal_raccordo(motore):
     """Il difetto piu' grave incontrato, e l'unico che nessun altro controllo
@@ -150,6 +187,7 @@ def test_la_gola_non_e_strozzata_dal_raccordo(motore):
     )
 
 
+@pesante
 @pytest.mark.slow
 def test_nessun_vuoto_comunica_con_un_altro_che_non_deve(motore):
     """Il controllo che chiude il cerchio in ottica SLM: fra due cavita' che
@@ -191,6 +229,7 @@ def test_nessun_vuoto_comunica_con_un_altro_che_non_deve(motore):
     assert not sotto, [f"{x.a}<->{x.b} = {x.minima*1e3:.3f} mm" for x in sotto]
 
 
+@pesante
 @pytest.mark.slow
 def test_niente_polvere_intrappolata_ne_frammenti(motore):
     """Due difetti SLM speculari: una sacca di vuoto chiusa e' polvere che non

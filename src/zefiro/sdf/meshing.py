@@ -26,8 +26,22 @@ def isosurface(campo: Field, livello: float = 0.0):
             f"il campo non attraversa il livello {livello}: intervallo "
             f"[{a.min():.4g}, {a.max():.4g}]. Griglia sbagliata o solido vuoto."
         )
-    v, f, _, _ = measure.marching_cubes(a, level=livello,
-                                        spacing=(campo.grid.spacing,) * 3)
+    # Due dettagli che decidono se la superficie e' manifold o no.
+    #
+    # `allow_degenerate=False`: di default marching_cubes emette anche i
+    # triangoli di area nulla che nascono quando l'isosuperficie passa esatta
+    # per un nodo. Sono innocui per la topologia ma alcuni slicer li rifiutano.
+    #
+    # Il livello spostato di un millesimo di voxel: se il campo vale
+    # ESATTAMENTE il livello su un nodo, il caso e' ambiguo e l'algoritmo puo'
+    # produrre spigoli condivisi da piu' di due facce. Uno scostamento
+    # infinitesimo toglie l'ambiguita' senza spostare la superficie in modo
+    # misurabile - e su un campo di distanza gli zeri esatti sui nodi non sono
+    # rari, sono la norma dove una parete e' allineata alla griglia.
+    eps = 1.0e-3 * campo.grid.spacing
+    v, f, _, _ = measure.marching_cubes(a, level=livello - eps,
+                                        spacing=(campo.grid.spacing,) * 3,
+                                        allow_degenerate=False)
     return v + np.asarray(campo.grid.origin), f
 
 

@@ -1,0 +1,14 @@
+# Il master sta su un disco Windows (I:), il calcolo gira in WSL, e gli script
+# vengono letti da bash. Senza questa riga basta un editor Windows che salva
+# CRLF perche' il file successivo risulti riscritto da capo nel diff - e
+# perche' bash si lamenti di caratteri invisibili a fine riga.
+# Nel repo si sta in LF, sempre. Al momento e' gia' cosi': 241 file su 241.
+* text=auto eol=lf
+
+# I binari non si toccano.
+*.png binary
+*.stl binary
+*.msh binary
+*.step binary
+*.zip binary
+*.parquet binary

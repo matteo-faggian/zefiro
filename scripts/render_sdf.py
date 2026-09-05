@@ -75,14 +75,15 @@ def main() -> int:
     a = ap.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from build_50N import CAMERA, GOLA, punto_operativo
+    from build_50N import circuiti, dimensiona_iniettore, punto_operativo
     from zefiro.sdf.core import to_numpy
     from zefiro.sdf.engine import costruisci
     from zefiro.sdf.meshing import isosurface
 
     op, params, l0 = punto_operativo()
+    _, testa = dimensiona_iniettore(op, params, l0)
     m = costruisci(params.derived, params.plug_contour_x, params.plug_contour_r,
-                   [CAMERA, GOLA], a.passo, raccordo=5.0e-4)
+                   circuiti(params.derived), a.passo, raccordo=5.0e-4, testa=testa)
     campo = to_numpy(m.solido.a)
     g = m.grid
     print(f"griglia {g.shape}, {g.n_voxels/1e6:.1f} Mvoxel")

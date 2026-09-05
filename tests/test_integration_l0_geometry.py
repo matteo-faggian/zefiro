@@ -46,6 +46,11 @@ def test_gli_avvisi_sono_presenti_quando_devono(operating_point, design_vector):
     _, l0 = derive(design_vector, operating_point)
     assert any("compensazione di quota" in w for w in l0.warnings)
     assert any("equilibrio chimico completo" in a for a in l0.assumptions)
+    #: L'ipotesi di mescolamento perfetto e' quella che pesa di piu' sulla
+    #: prestazione ed era l'unica che l'elenco non nominava. Un elenco di
+    #: ipotesi incompleto e' peggio di nessun elenco: fa credere che le altre
+    #: siano tutte.
+    assert any("mescolamento PERFETTO" in a for a in l0.assumptions)
 
 
 def test_fabbricabilita_non_verificata_e_dichiarata(operating_point, design_vector):

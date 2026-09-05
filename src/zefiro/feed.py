@@ -254,3 +254,64 @@ def autorefrigeration(
         p_start=saturation_pressure(composition, T),
         p_end=saturation_pressure(composition, T - dT),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Pressioni di alimentazione: DERIVATE, non scelte
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class SupplyPressures:
+    """Le due pressioni a monte dei riduttori, alla fine della raffica."""
+    p_fuel_supply: float     # Pa assoluti
+    p_air_supply: float      # Pa assoluti, fondo scarico del serbatoio
+    p_c_max: float           # Pa, tetto di pressione di camera
+    T_bottle: float          # K, temperatura di progetto della bombola
+    binding: str             # "bombola" oppure "serbatoio"
+
+
+def supply_pressures(
+    composition: dict[str, float],
+    T_bottle: float,
+    p_tank_max: float,
+    dp_fraction: float,
+) -> SupplyPressures:
+    """Deriva le pressioni di alimentazione da (composizione, temperatura).
+
+    Il punto che questa funzione esiste per rendere impossibile da sbagliare:
+    **la pressione del GPL non e' un parametro di progetto, e' una proprieta'
+    termodinamica**. Vale p_sat(T) e nient'altro. Scriverla a mano in un file di
+    configurazione significa poter scrivere un numero che la fisica non produce
+    a nessuna temperatura raggiungibile, e non accorgersene.
+
+    Da qui discendono, in cascata:
+
+      * il tetto di camera  p_c,max = p_sat / (1 + f_Dp) : sopra, il GPL non ha
+        abbastanza salto per entrare in modo stabile;
+      * il fondo scarico del serbatoio d'aria, che si pone UGUALE a p_sat. Piu'
+        in alto si spreca aria (e quindi durata) senza guadagnare nulla, perche'
+        il tetto lo fissa comunque il GPL; piu' in basso il riduttore dell'aria
+        perde il controllo prima di quello del GPL, e la miscela va ricca in
+        modo incontrollato proprio a fine raffica.
+
+    Se la bombola e' piu' calda del serbatoio (p_sat > p_tank_max) il vincolo si
+    scambia: comanda il serbatoio. Il campo `binding` dice quale dei due.
+
+    `dp_fraction` e' la frazione di p_c richiesta come salto d'iniezione
+    (0.15 in Zefiro, vedi opt.objectives.MIN_INJECTOR_DP_FRACTION): sotto quella
+    soglia l'iniettore non disaccoppia piu' l'alimentazione dalla camera e il
+    sistema puo' entrare in oscillazione di tipo chugging.
+    """
+    p_sat = saturation_pressure(composition, T_bottle)
+    if p_sat >= p_tank_max:
+        p_sup = p_tank_max
+        binding = "serbatoio"
+    else:
+        p_sup = p_sat
+        binding = "bombola"
+    return SupplyPressures(
+        p_fuel_supply=p_sat,
+        p_air_supply=p_sup,
+        p_c_max=p_sup / (1.0 + dp_fraction),
+        T_bottle=T_bottle,
+        binding=binding,
+    )

@@ -52,6 +52,15 @@ def evaluate_l0(
 
     warnings: list[str] = []
     assumptions: list[str] = [
+        #: L'IPOTESI PIU' PESANTE DELLA CATENA, e fino alla revisione 0.7.0 era
+        #: l'unica non dichiarata. `chamber_state` mette le due portate in un
+        #: miscelatore adiabatico e porta il risultato all'equilibrio: dentro
+        #: quella riga c'e' "aria e combustibile perfettamente mescolati", che
+        #: la CFD di mescolamento e' li' apposta per verificare. Senza questa
+        #: riga l'elenco delle ipotesi sembrava completo e non lo era.
+        "mescolamento PERFETTO fra aria e combustibile: la prestazione e' il "
+        "limite superiore. `zefiro.l0.mescolamento` traduce la disuniformita' "
+        "misurata dalla CFD nella spinta che si perde",
         "equilibrio chimico completo in camera (limite superiore di T_ad e c*)",
         "velocita' in camera trascurabile: T statica = T di ristagno",
         "camera adiabatica: nessuna perdita verso la parete",

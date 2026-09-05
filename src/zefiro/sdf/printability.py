@@ -196,6 +196,17 @@ def isole_di_materiale(campo_solido, volume_minimo: float = 0.0):
     Ritorna (campo_pulito, n_isole, volume_isole). Le isole piu' piccole di
     `volume_minimo` vengono rimosse dal campo; le altre restano, perche' un
     frammento grande e' un errore di progetto da capire, non da nascondere.
+
+    ATTENZIONE ALLA LETTURA DEL RISULTATO. `n_isole` e `volume_isole` contano
+    TUTTE le isole, comprese quelle che NON sono state rimosse perche' troppo
+    grandi. Un messaggio del tipo "tolte 35 isole (10536 mm3)" e' quindi
+    fuorviante due volte: non sono state tolte tutte, e 10.5 cm3 su un pezzo da
+    24 non sono frammenti, sono meta' del motore che risulta staccata. Quando
+    quel numero e' grande la domanda giusta non e' "quanto materiale butto" ma
+    "perche' il campo si e' spezzato", e la risposta e' quasi sempre la
+    risoluzione. Per questo la funzione ritorna anche il volume della
+    componente PRINCIPALE e quello della piu' grande isola RIMASTA: sono i due
+    numeri che distinguono un artefatto da un difetto.
     """
     from scipy import ndimage
 
@@ -213,6 +224,9 @@ def isole_di_materiale(campo_solido, volume_minimo: float = 0.0):
     passo = campo_solido.grid.spacing
     n_isole = 0
     volume = 0.0
+    n_tolte = 0
+    volume_tolto = 0.0
+    v_max_rimasta = 0.0
     for k in range(1, n + 1):
         if k == principale or conte[k] == 0:
             continue
@@ -221,7 +235,18 @@ def isole_di_materiale(campo_solido, volume_minimo: float = 0.0):
         volume += v
         if v <= volume_minimo:
             a[etichette == k] = abs(a[etichette == k]) + passo
-    return Field(campo_solido.grid, a, campo_solido.xp), n_isole, volume
+            n_tolte += 1
+            volume_tolto += v
+        else:
+            v_max_rimasta = max(v_max_rimasta, v)
+    campo = Field(campo_solido.grid, a, campo_solido.xp)
+    campo.diagnostica_isole = {
+        "n_totali": n_isole, "volume_totale": volume,
+        "n_tolte": n_tolte, "volume_tolto": volume_tolto,
+        "volume_principale": float(conte[principale]) * passo**3,
+        "volume_massima_rimasta": v_max_rimasta,
+    }
+    return campo, n_isole, volume
 
 
 def riempi_sacche_chiuse(campo_solido, volume_massimo: float):

@@ -23,9 +23,11 @@ def test_i_file_di_config_esistono():
 
 def test_il_punto_di_progetto_deciso_e_caricato():
     op = load_operating_point()
-    assert op.mdot_air_max == pytest.approx(0.0718)
+    assert op.mdot_air_max == pytest.approx(0.0470)
     assert op.burn_time == pytest.approx(BURN_TIME)
-    assert op.p_fuel_supply == pytest.approx(8.0e5)
+    # NON un numero scritto a mano: e' p_sat(propano, 15 C) da CoolProp.
+    from zefiro.feed import saturation_pressure
+    assert op.p_fuel_supply == pytest.approx(saturation_pressure({"C3H8": 1.0}, 288.15))
 
 
 def test_la_pressione_daria_di_config_e_la_MINIMA_non_la_massima():
@@ -34,7 +36,7 @@ def test_la_pressione_daria_di_config_e_la_MINIMA_non_la_massima():
     Dimensionare sui 10 bar iniziali significherebbe progettare per un istante
     che dura zero."""
     op = load_operating_point()
-    assert op.p_air_supply == pytest.approx(6.0e5)
+    assert op.p_air_supply == pytest.approx(op.p_fuel_supply)
     assert op.p_air_supply < TANK_P_MAX
 
 
@@ -69,7 +71,10 @@ def test_la_pressione_di_camera_rispetta_il_vincolo_lato_aria():
     assert p_c * (1.0 + MIN_INJECTOR_DP_FRACTION) <= op.p_air_supply * 1.001
     # e il lato GPL deve avere ancora margine: il collo di bottiglia si e'
     # spostato sull'aria, ed e' un fatto di progetto da non perdere
-    assert p_c * (1.0 + MIN_INJECTOR_DP_FRACTION) < op.p_fuel_supply
+    # I due lati si chiudono INSIEME per costruzione: il fondo scarico del
+    # serbatoio e' posto uguale a p_sat, che e' il solo valore che non spreca
+    # aria ne' lascia il riduttore dell'aria a corto prima di quello del GPL.
+    assert p_c * (1.0 + MIN_INJECTOR_DP_FRACTION) <= op.p_fuel_supply * 1.001
 
 
 def test_il_film_cooling_e_disattivato_ma_la_capacita_resta():
@@ -123,3 +128,79 @@ def test_la_cartella_delle_run_e_configurabile(monkeypatch, tmp_path):
     assert runs_root() == Path("runs")
     monkeypatch.setenv("ZEFIRO_RUNS", str(tmp_path / "altrove"))
     assert runs_root() == tmp_path / "altrove"
+
+
+# --------------------------------------------------------------------------- #
+# La pressione del GPL e' termodinamica, non configurazione
+# --------------------------------------------------------------------------- #
+def _config_modificata(tmp_path, **campi):
+    """Copia operating_point.yaml cambiando alcuni campi di primo livello."""
+    import yaml
+
+    d = yaml.safe_load((CONFIG_DIR / "operating_point.yaml").read_text(encoding="utf-8"))
+    for k, v in campi.items():
+        if k == "T_design_K":
+            d["fuel"]["bottle"]["T_design_K"] = v
+        else:
+            d[k] = v
+    q = tmp_path / "op.yaml"
+    q.write_text(yaml.safe_dump(d), encoding="utf-8")
+    return q
+
+
+def test_una_pressione_di_bombola_impossibile_viene_rifiutata(tmp_path):
+    """8 bar a 15 C non esistono: il propano PURO ne fa 7.32, e non c'e' miscela
+    piu' volatile del propano puro fra quelle di una bombola da barbecue.
+
+    E' il difetto che questo controllo esiste per intercettare: fino alla
+    revisione 0.4.0 il file conteneva 8.0 bar scritti a mano, cioe' la
+    tensione di vapore a 18.3 C, e l'intero punto operativo era valido solo
+    sopra quella temperatura senza che nulla lo dicesse."""
+    from zefiro.schemas import MissingDatum
+
+    q = _config_modificata(tmp_path, p_fuel_supply_bar=8.0)
+    with pytest.raises(MissingDatum, match="satura"):
+        load_operating_point(q)
+
+
+def test_la_stessa_pressione_e_accettata_se_la_bombola_e_calda(tmp_path):
+    """Non e' il numero 8.0 a essere vietato: e' 8.0 A 15 GRADI. A 20 C la
+    bombola satura a 8.36 bar e 8.0 diventa un dato legittimo."""
+    q = _config_modificata(tmp_path, p_fuel_supply_bar=8.0, T_design_K=293.15)
+    assert load_operating_point(q).p_fuel_supply == pytest.approx(8.0e5)
+
+
+def test_senza_temperatura_di_progetto_non_c_e_punto_operativo(tmp_path):
+    from zefiro.schemas import MissingDatum
+
+    q = _config_modificata(tmp_path, T_design_K=None)
+    with pytest.raises(MissingDatum, match="T_design_K"):
+        load_operating_point(q)
+
+
+def test_la_frazione_di_dp_del_loader_e_quella_dell_ottimizzatore():
+    """_DP_FRACTION e' duplicata in config.py per non far dipendere il
+    caricamento della configurazione dall'ottimizzatore. La duplicazione e'
+    lecita solo se qualcuno verifica che i due numeri coincidano."""
+    from zefiro.config import _DP_FRACTION
+    from zefiro.opt.objectives import MIN_INJECTOR_DP_FRACTION
+
+    assert _DP_FRACTION == MIN_INJECTOR_DP_FRACTION
+
+
+def test_la_bombola_piu_calda_accorcia_la_raffica():
+    """Il risultato controintuitivo che dimensiona il motore.
+
+    Una bombola piu' calda alza p_c e quindi l'Isp. Ma il fondo scarico del
+    serbatoio d'aria vale p_sat, quindi alzarlo toglie massa utilizzabile
+    dal serbatoio: fra 10 bar e p_sat resta meno aria, e la raffica si
+    accorcia. Il requisito dei 5 s cade a 18.8 C.
+
+    Conseguenza pratica: la bombola va tenuta FRESCA, non tiepida."""
+    from zefiro.feed import saturation_pressure, tank_blowdown
+
+    durate = []
+    for T in (288.15, 293.15):
+        p = saturation_pressure({"C3H8": 1.0}, T)
+        durate.append(tank_blowdown(0.100, TANK_P_MAX, p, 293.15).mass_usable_adiabatic)
+    assert durate[1] < durate[0]

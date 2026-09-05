@@ -24,7 +24,10 @@ from zefiro.l0.mixture import MixtureModel                             # noqa: E
 from zefiro.schemas import FuelSpec, OperatingPoint                    # noqa: E402
 from zefiro.thermal import adiabatic_wall_temperature, bartz_h_gas     # noqa: E402
 
-P_SUP = 8.0e5
+from zefiro.config import load_operating_point   # noqa: E402
+
+#: derivata da p_sat(T_design) della bombola, non scritta a mano.
+P_SUP = load_operating_point().p_air_supply
 P_C = P_SUP / 1.15
 T_WALL = 800.0
 
@@ -33,7 +36,7 @@ def punto_50N():
     fuel = FuelSpec(composition={"C3H8": 1.0}, phase_at_injection="gas",
                     thermo_source="gri30.yaml")
     def op(m):
-        return OperatingPoint(p_amb=101325.0, p_air_supply=P_SUP, p_fuel_supply=8.0e5,
+        return OperatingPoint(p_amb=101325.0, p_air_supply=P_SUP, p_fuel_supply=P_SUP,
                               fuel=fuel, T_air_in=293.0, T_fuel_in=283.0,
                               mdot_air_max=m, cd_injector_ox=0.75, cd_injector_fuel=0.75)
     m = brentq(lambda m: evaluate_l0(op(m), p_c=P_C, phi_core=0.9, f_film=0.0,

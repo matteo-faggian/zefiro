@@ -26,13 +26,15 @@ from zefiro.units import DEG, R_UNIVERSAL
 #: Bounds dei 12 parametri liberi. Unita' SI. Vedi docs/architettura.md 4.1
 #: per la motivazione di ciascuno.
 DESIGN_BOUNDS: dict[str, tuple[float, float]] = {
-    # Il tetto NON e' un numero tondo: e' il minimo fra i due limiti di
-    # alimentazione, p_serbatoio/1.15 e p_bombola/1.15. Con il serbatoio
-    # scaricato fino a 8 bar e la bombola a 8 bar i due coincidono a 6.96 bar,
-    # e il bound e' messo appena sopra per non tagliare l'ottimo. Era 6.0e5
-    # quando il serbatoio si scaricava fino a 6 bar: il bound seguiva
-    # l'impianto, e l'impianto e' cambiato.
-    "p_c":             (3.0e5, 7.0e5),      # Pa
+    # Questo bound e' una SCATOLA DI RICERCA, non un limite fisico, e la
+    # differenza e' costata un rifiuto sbagliato. Valeva 7.0e5 perche' seguiva
+    # un impianto in cui la bombola stava a 8 bar; con una bombola a 20 C il
+    # tetto vero e' 8.36/1.15 = 7.27 bar e il sintetizzatore veniva bloccato da
+    # un numero tabellato invece che dalla fisica. Il tetto VERO lo calcola
+    # feed.supply_pressures a ogni progetto; qui basta che la scatola sia
+    # abbastanza larga da contenerlo: 9 bar sono il serbatoio a 10 bar diviso
+    # 1.15, cioe' il massimo che questo impianto puo' fisicamente produrre.
+    "p_c":             (2.0e5, 9.0e5),      # Pa
     "phi_core":        (0.70, 1.15),        # -
     "f_film":          (0.00, 0.35),        # -
     "Dc_over_Dt":      (2.00, 5.00),        # -
@@ -273,3 +275,31 @@ def check_manufacturability(
         for name, value in checks.items()
         if 0.0 < value < min_feature_size
     )
+
+
+def bounds_per_impianto(op: OperatingPoint, frazione_dp: float = 0.15,
+                        base: dict[str, tuple[float, float]] | None = None
+                        ) -> dict[str, tuple[float, float]]:
+    """Restringe la scatola di ricerca all'impianto che si ha davvero.
+
+    `DESIGN_BOUNDS` e' una scatola GENERICA: contiene tutto cio' che
+    l'architettura sa fare, non tutto cio' che questo impianto sa alimentare.
+    Il tetto vero di p_c e' min(p_aria, p_GPL)/(1 + frazione_dp), e dipende
+    dalla bombola, quindi dalla temperatura, quindi dal giorno.
+
+    Serve perche' un campionamento (DoE, ottimizzatore) che pesca dentro la
+    scatola generica genera punti in cui il combustibile non puo' entrare in
+    camera. Non e' un difetto del campionamento: e' che la scatola non era
+    quella giusta. Prima era il bound tabellato a essere stretto e a nascondere
+    il problema; togliendogli il tappo, il problema e' venuto fuori subito ed e'
+    stato un test a trovarlo.
+    """
+    b = dict(base or DESIGN_BOUNDS)
+    tetto = min(op.p_air_supply, op.p_fuel_supply) / (1.0 + frazione_dp)
+    lo, hi = b["p_c"]
+    if tetto <= lo:
+        raise ValueError(
+            f"l'impianto regge al massimo p_c = {tetto/1e5:.2f} bar, sotto il minimo "
+            f"della scatola di ricerca ({lo/1e5:.2f} bar): non c'e' niente da cercare.")
+    b["p_c"] = (lo, min(hi, tetto))
+    return b

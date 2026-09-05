@@ -38,10 +38,11 @@ def load_operating_point(path: Path | None = None) -> OperatingPoint:
         phase_at_injection=f["phase_at_injection"],
         thermo_source=f["thermo_source"],
     )
+    p_fuel, p_air = _supply(d, fuel)
     return OperatingPoint(
         p_amb=float(d["p_amb_bar"]) * BAR,
-        p_air_supply=float(d["p_air_supply_bar"]) * BAR,
-        p_fuel_supply=float(d["p_fuel_supply_bar"]) * BAR,
+        p_air_supply=p_air,
+        p_fuel_supply=p_fuel,
         fuel=fuel,
         T_air_in=_opt(d.get("T_air_in_K")),
         T_fuel_in=_opt(d.get("T_fuel_in_K")),
@@ -81,3 +82,69 @@ def load_material(name: str = "aisi316l") -> dict[str, Any]:
 
 def _opt(v: Any) -> float | None:
     return None if v is None else float(v)
+
+
+DERIVED = "derived"
+
+
+def _supply(d: dict[str, Any], fuel: FuelSpec) -> tuple[float, float]:
+    """Risolve `p_fuel_supply_bar` e `p_air_supply_bar`.
+
+    Il valore ammesso e' `derived`: le due pressioni si calcolano dalla
+    temperatura di progetto della bombola (vedi `zefiro.feed.supply_pressures`
+    per il perche' fisico di ciascuna).
+
+    Un numero esplicito resta ammesso perche' una misura di targa e' un dato
+    legittimo, ma viene **rifiutato se supera p_sat alla temperatura di
+    progetto**: quella e' una pressione che la termodinamica non produce, e un
+    file di configurazione non deve poterla esprimere. E' esattamente l'errore
+    che questa funzione esiste per rendere impossibile.
+    """
+    from zefiro.feed import saturation_pressure, supply_pressures
+
+    bottle = d["fuel"].get("bottle") or {}
+    T_design = bottle.get("T_design_K")
+    if T_design is None:
+        raise MissingDatum(
+            "fuel.bottle.T_design_K assente. E' la temperatura MINIMA a cui il "
+            "motore verra' acceso: fissa p_sat, quindi il tetto di p_c, quindi "
+            "l'intera geometria. Senza, non c'e' punto operativo."
+        )
+    p_tank_max = float(d["plant"]["air_tank"]["p_max_bar"]) * BAR
+    sup = supply_pressures(dict(fuel.composition), float(T_design), p_tank_max,
+                           _DP_FRACTION)
+
+    p_sat = saturation_pressure(dict(fuel.composition), float(T_design))
+    p_fuel = _pressione(d, "p_fuel_supply_bar", sup.p_fuel_supply)
+    p_air = _pressione(d, "p_air_supply_bar", sup.p_air_supply)
+    if p_fuel > p_sat * (1.0 + 1.0e-9):
+        raise MissingDatum(
+            f"p_fuel_supply_bar = {p_fuel/BAR:.2f} bar, ma a "
+            f"{float(T_design)-273.15:.1f} C la bombola satura a {p_sat/BAR:.2f} bar. "
+            "Nessuna bombola eroga piu' della propria tensione di vapore: o la "
+            "temperatura di progetto e' piu' alta, o la miscela contiene piu' "
+            "propano di quanto dichiarato (misura pressione E temperatura "
+            "insieme e usa feed.composition_from_pressure), o il numero e' sbagliato."
+        )
+    if p_air > p_tank_max * (1.0 + 1.0e-9):
+        raise MissingDatum(
+            f"p_air_supply_bar = {p_air/BAR:.2f} bar supera il massimo del "
+            f"serbatoio ({p_tank_max/BAR:.2f} bar)."
+        )
+    return p_fuel, p_air
+
+
+#: Frazione minima di p_c richiesta come salto d'iniezione. Duplicata qui e non
+#: importata da opt.objectives per non far dipendere il caricamento della
+#: configurazione dall'ottimizzatore; il test test_config.py verifica che i due
+#: valori coincidano.
+_DP_FRACTION = 0.15
+
+
+def _pressione(d: dict[str, Any], chiave: str, derivata: float) -> float:
+    v = d[chiave]
+    if isinstance(v, str):
+        if v.strip().lower() != DERIVED:
+            raise MissingDatum(f"{chiave}: atteso un numero o '{DERIVED}', letto {v!r}.")
+        return derivata
+    return float(v) * BAR

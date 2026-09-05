@@ -58,10 +58,11 @@ pesante = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def motore():
-    from build_50N import CAMERA, GOLA, punto_operativo
+    from build_50N import circuiti, dimensiona_iniettore, punto_operativo
     op, params, l0 = punto_operativo()
+    _, testa = dimensiona_iniettore(op, params, l0)
     m = costruisci(params.derived, params.plug_contour_x, params.plug_contour_r,
-                   [CAMERA, GOLA], PASSO, raccordo=5.0e-4)
+                   circuiti(params.derived), PASSO, raccordo=5.0e-4, testa=testa)
     return params, l0, m
 
 
@@ -149,12 +150,13 @@ def test_la_sezione_dei_canali_e_quella_progettata(motore):
 def test_il_collettore_non_puo_strozzare():
     """Se l'attacco e' piu' stretto della somma dei canali, la portata la
     decide l'attacco e non il progetto. Il costruttore deve dirlo."""
-    from build_50N import CAMERA, GOLA
+    from build_50N import circuiti, punto_operativo
     from zefiro.sdf.engine import PORTA_DIAMETRO, PORTE_PER_COLLETTORE
 
+    op, params, l0 = punto_operativo()
     # Sono TRE attacchi per collettore, non uno: conta la loro somma.
     sezione = PORTE_PER_COLLETTORE * math.pi / 4.0 * PORTA_DIAMETRO**2
-    for c in (CAMERA, GOLA):
+    for c in circuiti(params.derived):
         assert sezione >= c.n_canali * c.lato**2, (
             f"attacchi {sezione*1e6:.2f} mm2 contro canali "
             f"{c.n_canali*c.lato**2*1e6:.2f} mm2 sul ramo {c.nome}")
@@ -243,3 +245,85 @@ def test_niente_polvere_intrappolata_ne_frammenti(motore):
     assert ok, f"{sacche} sacche di vuoto chiuse: polvere che non esce"
     v, f = isosurface(m.solido)
     assert len(connected_components(v, f)) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Testa d'iniezione a getti trasversali
+# --------------------------------------------------------------------------- #
+def _testa():
+    from build_50N import dimensiona_iniettore, punto_operativo
+    op, params, l0 = punto_operativo()
+    return dimensiona_iniettore(op, params, l0) + (params, l0)
+
+
+def test_la_testa_non_ha_niente_da_segnalare():
+    """`TestaIniezione.verifica` raccoglie le condizioni che il
+    dimensionamento non garantisce da solo: lunghezza confinata a valle dei
+    getti, dimensione del plenum dell'aria e di quello del GPL, parete fra i
+    due, ingombro della bozza filettata. Se una di queste si accende, la
+    geometria e' costruibile ma non e' piu' quella che il calcolo descrive."""
+    inj, testa, params, l0 = _testa()
+    assert testa.verifica(inj.lunghezza_mescolamento) == []
+
+
+def test_i_getti_hanno_condotto_a_sufficienza_a_valle():
+    """La correlazione di Holdeman vale in un condotto CONFINATO. Se i getti
+    stanno troppo vicini allo sbocco il mescolamento finirebbe in camera, dove
+    di condotto non ce n'e' piu' e la correlazione non dice piu' niente."""
+    inj, testa, _, _ = _testa()
+    assert testa.lunghezza_confinata() >= inj.lunghezza_mescolamento
+
+
+def test_l_area_del_condotto_costruito_e_quella_dimensionata():
+    """Chiusura fra `zefiro.injector` e la geometria: se qualcuno cambia
+    R_getti o R_anello senza rifare il dimensionamento, l'area di passaggio
+    dell'aria cambia e con essa la velocita', J, il passo dei getti e tutto
+    il resto."""
+    inj, testa, _, _ = _testa()
+    assert testa.area_anello() == pytest.approx(inj.area_aria, rel=1e-9)
+    assert testa.area_getti() == pytest.approx(
+        inj.n_getti * math.pi / 4.0 * inj.d_getto ** 2, rel=1e-12)
+
+
+def test_la_bozza_dell_aria_appoggia_tutta_sulla_testa():
+    """Una faccia di guarnizione che sporge nel vuoto non tiene 7 bar."""
+    _, testa, _, _ = _testa()
+    semi = 0.5 * testa.d_boss_aria
+    assert testa.x_porta_aria - semi >= testa.x_faccia - 1e-9
+    assert testa.x_porta_aria + semi <= 1e-9
+
+
+def test_il_raccordo_dell_aria_non_si_mangia_il_salto_di_iniezione():
+    """Il numero che ha deciso la taglia della filettatura, e con essa la
+    lunghezza dell'intera testa.
+
+    Il salto d'iniezione dell'aria e' 0.15 p_c e non c'e' nient'altro: p_c e'
+    fissata a p_sat/1.15. Un G1/4 ne brucerebbe il 35 % nel solo raccordo.
+    """
+    from zefiro.injector import BSPP, perdita_raccordo
+    from build_50N import FILETTO_ARIA
+
+    inj, testa, params, l0 = _testa()
+    rho = params.free["p_c"] / (287.05 * 293.0)
+    _, dp = perdita_raccordo(l0.mdot_air, rho,
+                             BSPP[FILETTO_ARIA]["punta"] - 5.0e-3)
+    assert dp < 0.15 * 0.15 * params.free["p_c"], (
+        "il raccordo dell'aria si mangia piu' del 15 % del salto d'iniezione: "
+        "va scelta una taglia piu' grande")
+
+
+def test_la_filettatura_del_gpl_sta_nel_corpo_centrale():
+    _, testa, _, _ = _testa()
+    assert 0.5 * testa.d_filetto_gpl + 5.0e-4 <= testa.R_corpo_plenum
+
+
+def test_i_fori_si_stampano_sottomisura():
+    """Un foro SLM esce piu' piccolo del nominale e con la parete rugosa: si
+    stampa sotto e si porta a quota con la punta. Stampare a misura significa
+    maschiare dentro un foro storto."""
+    from zefiro.injector import BSPP
+    from build_50N import FILETTO_ARIA, FILETTO_GPL
+
+    _, testa, _, _ = _testa()
+    assert testa.d_porta_aria < BSPP[FILETTO_ARIA]["punta"]
+    assert testa.d_filetto_gpl < BSPP[FILETTO_GPL]["punta"]

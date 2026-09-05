@@ -107,7 +107,11 @@ class Field:
     verso l'esterno di `t`.
     """
 
-    __slots__ = ("grid", "a", "xp")
+    #: `diagnostica_isole` non e' parte del campo: e' un referto che
+    #: `printability.isole_di_materiale` allega al risultato. Sta negli slot
+    #: perche' senza, con __slots__, l'assegnazione fallirebbe in silenzio solo
+    #: a runtime e solo su quel percorso.
+    __slots__ = ("grid", "a", "xp", "diagnostica_isole")
 
     def __init__(self, grid: Grid, array: Any, xp=None) -> None:
         self.grid = grid

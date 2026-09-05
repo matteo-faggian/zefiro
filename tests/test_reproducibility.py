@@ -69,13 +69,22 @@ def test_l0_e_deterministico(operating_point, design_vector):
 def test_il_doe_e_riproducibile_end_to_end(operating_point, n):
     """Stesso seme -> stessi vettori di progetto -> stessi risultati L0."""
     from zefiro.doe import latin_hypercube
-    from zefiro.geometry.parameters import DESIGN_BOUNDS, INTEGER_PARAMETERS
+    from zefiro.geometry.parameters import (
+        DESIGN_BOUNDS, INTEGER_PARAMETERS, bounds_per_impianto,
+    )
     from zefiro.schemas import DesignVector
+
+    # La scatola generica contiene p_c fino a 9 bar, che e' cio' che
+    # l'architettura sa fare; questo impianto ne regge molte meno. Campionare
+    # nella scatola generica genera punti in cui il combustibile non puo'
+    # entrare in camera - ed e' giusto che evaluate_l0 li rifiuti, non che il
+    # bound li nasconda.
+    bounds = bounds_per_impianto(operating_point)
 
     def run(seed):
         out = []
-        for v in latin_hypercube(n, DESIGN_BOUNDS, seed, INTEGER_PARAMETERS):
-            _, l0 = derive(DesignVector(values=v, bounds=DESIGN_BOUNDS), operating_point)
+        for v in latin_hypercube(n, bounds, seed, INTEGER_PARAMETERS):
+            _, l0 = derive(DesignVector(values=v, bounds=bounds), operating_point)
             out.append(l0.thrust)
         return out
 

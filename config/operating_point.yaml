@@ -13,7 +13,13 @@ p_amb_bar:          1.01325     # atmosfera standard al livello del mare
 # costante solo finche' a monte ha almeno p_c + Dp_iniettore + la sua caduta.
 # L'istante critico e' la FINE della raffica, quando il serbatoio e' al minimo.
 # Dimensionare su 10 bar significherebbe progettare per un istante che dura zero.
-p_air_supply_bar:    6.0
+# 'derived' = uguale a p_sat(T_design) della bombola. NON e' una coincidenza
+# imposta: e' il solo valore che non spreca nulla. Fermarsi piu' in alto butta
+# via aria (e quindi durata) senza alzare p_c, che lo fissa comunque il GPL;
+# scendere piu' in basso fa perdere il controllo al riduttore dell'aria PRIMA
+# che a quello del GPL, e la miscela va ricca in modo incontrollato proprio a
+# fine raffica, con il motore gia' caldo. Vedi feed.supply_pressures.
+p_air_supply_bar:    derived
 
 plant:
   compressor:
@@ -33,7 +39,7 @@ plant:
     # Il serbatoio permette RAFFICHE a portata molto superiore alla continua:
     #   10 -> 6 bar rende 359 g utilizzabili (limite adiabatico)
     #   a 50 g/s -> 8.2 s ; a 100 g/s -> 3.8 s
-    p_min_usable_bar:  6.0      # [DECISO] scarico 10 -> 6 bar
+    p_min_usable_bar:  derived  # = p_sat(T_design) = 7.32 bar a 15 C
     # Compromesso quantificato: scaricare piu' a fondo da' piu' portata (quindi
     # piu' spinta) ma abbassa la p_c ammissibile. La spinta cresce in modo
     # monotono scendendo, ma sotto i 6 bar mordono tre limiti pratici:
@@ -42,15 +48,23 @@ plant:
     #   - eps scende sotto 1.2 e l'ugello smette di essere un ugello
 
 # --- IMPIANTO GPL -----------------------------------------------------------
-# [dato utente] bombola da barbecue, indicata a 8 bar.
-# NOTA FISICA: la pressione di una bombola non dipende da quanto liquido resta,
-# ma SOLO da temperatura e composizione. 8 bar assoluti sono compatibili con:
-#     propano ~94 %  a 20 C        (propano puro: 8.37 bar a 20 C)
-#     propano ~65 %  a 30 C
-#     impossibile    a 10 C  (servirebbe piu' del 100 % di propano)
-# Quindi il dato "8 bar" da solo non identifica la miscela: serve la coppia
-# (pressione, temperatura) misurata insieme. Vedi TODO C.
-p_fuel_supply_bar:   8.0
+# NON scrivere qui un numero. La pressione di una bombola non e' un parametro
+# di progetto: e' p_sat(T, composizione), e nient'altro. Non dipende da quanto
+# liquido resta dentro. Il valore lo deriva zefiro.feed.supply_pressures dalla
+# temperatura di progetto qui sotto.
+#
+# Perche' questo campo e' stato tolto: fino alla revisione 0.4.0 valeva 8.0 bar
+# scritti a mano. Sono la tensione di vapore del propano puro a 18.3 C. Sotto
+# quella temperatura la bombola NON eroga 8 bar, eroga meno, e il punto
+# operativo dell'intero motore era valido solo per giornate tiepide senza che
+# nulla nel codice lo dicesse. Ora e' impossibile scriverlo.
+#
+#   propano puro:  0 C -> 4.74 bar   10 C -> 6.37   15 C -> 7.32   20 C -> 8.36
+#
+# 'derived' = calcolato da (fuel.composition_mole, fuel.bottle.T_design_K).
+# Un numero esplicito e' ancora ammesso ma viene RIFIUTATO se supera p_sat alla
+# temperatura di progetto: serve solo a documentare una misura, non a inventare.
+p_fuel_supply_bar:   derived
 
 fuel:
   # TODO C: misura pressione E temperatura della bombola nello stesso momento,
@@ -66,6 +80,26 @@ fuel:
   phase_at_injection: gas
   thermo_source: gri30.yaml
   bottle:
+    # [DECISO] Temperatura MINIMA di progetto della bombola.
+    # E' un requisito operativo, non una previsione meteo: sotto questa
+    # temperatura il motore non deve essere acceso, e la si tiene con la
+    # bombola immersa in un bagno d'acqua (un secchio ha una capacita' termica
+    # enorme rispetto ai 30 W sottratti dall'evaporazione: vedi
+    # feed.autorefrigeration).
+    #
+    # Perche' 15 C e non di piu'. La durata della raffica e' la massa d'aria
+    # estraibile fra 10 bar e il fondo scarico, e il fondo scarico vale p_sat:
+    # una bombola PIU' CALDA alza p_c e l'Isp ma accorcia la raffica, in fretta.
+    #   bombola a 15 C -> p_c 6.36 bar, Isp 143.7 s, 7.00 s di raffica
+    #   bombola a 20 C -> p_c 7.27 bar, Isp 147.9 s, 4.31 s  (requisito violato)
+    # Il requisito dei 5 s cade esattamente a 18.8 C. 15 C lascia il 40 % di
+    # margine sulla durata e resta una soglia che si puo' GARANTIRE dal basso,
+    # cosa molto piu' facile che garantire un massimo.
+    #
+    # Perche' non di meno. Scendendo, eps -> 1.29 a 0 C e l'ugello smette di
+    # essere un ugello; l'Isp perde 15 s. E il motore va costruito per UNA
+    # geometria: la scelta e' la temperatura piu' bassa a cui si accende.
+    T_design_K:       288.15
     tare_kg:          null      # TODO E: stampigliata sul collare
     total_weight_kg:  null      # TODO E: con una bilancia -> massa di liquido
     # TODO F: portata massima ammessa dal riduttore [kg/h]. Un riduttore da
@@ -81,14 +115,26 @@ T_air_in_K:         null
 T_fuel_in_K:        null
 
 # --- PUNTO DI PROGETTO [DECISO]: 5 s in regime stazionario -------------------
-# Il riduttore tiene p_c costante mentre il serbatoio scende da 10 a 6 bar.
-# Massa utilizzabile 359 g (limite adiabatico dello svuotamento 10 -> 6 bar).
-#   mdot = 359.4 g / 5 s = 71.8 g/s (arrotondato per difetto)
+# Il riduttore tiene p_c costante mentre il serbatoio scende da 10 bar fino al
+# fondo scarico, che NON e' piu' 6 bar scelti a mano ma p_sat(T_design) = 7.32
+# bar (vedi p_air_supply_bar). Massa utilizzabile 235 g, limite adiabatico.
+#   mdot = 235.1 g / 5 s = 47.0 g/s
+#
+# QUESTO NUMERO E' SCESO del 35 % rispetto alla revisione precedente (71.8 g/s),
+# e la ragione e' l'errore corretto in 0.4.0: il fondo scarico era stato scelto
+# a 6 bar quando il tetto di p_c era ancora fissato da una pressione di bombola
+# inventata. Legare il fondo scarico a p_sat toglie 124 g di aria utilizzabile.
+# E' il costo di dire la verita' sulla bombola, e va contato, non nascosto.
+#
+# Cio' che NON cambia e' il motore da 50 N: assorbe 33.6 g/s, quindi sta dentro
+# i 47.0 con il 40 % di margine, e la sua raffica dura 7.0 s invece di 5.0.
+# Cio' che cambia e' il motore PIU' GRANDE alimentabile da questo impianto.
+#
 # La ricarica del compressore durante la raffica NON e' contata: e' ancora un
 # TODO (A) e vale 4-7 g/s, cioe' il 3-5 % della massa. Contarla significherebbe
 # far dipendere il punto di progetto da un numero che non hai ancora misurato.
 # Quando leggerai la targa diventera' margine, non un aggiustamento.
-mdot_air_max_kg_s:  0.0718
+mdot_air_max_kg_s:  0.0470
 
 # --- TODO I: coefficienti di efflusso degli iniettori ------------------------
 cd_injector_ox:     null

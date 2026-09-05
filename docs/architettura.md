@@ -1444,6 +1444,661 @@ parete, che e' gia' inclinata di 37 gradi, e recuperare gli ultimi gradi costa
 massa senza guadagnare molto (pendenza 1.4 -> 3.2 porta gli sbalzi da 4.05 a
 3.20 cm² e aggiunge 3 g). E' un compromesso, dichiarato.
 
+## 8sexies. Revisione 0.4.0 — la bombola, la tenuta, l'iniettore
+
+Tre correzioni indipendenti che si sono rivelate collegate. Vale la pena
+leggerle in quest'ordine perché è quello in cui si sono trovate.
+
+### 8sexies.1 La pressione di bombola non è un parametro di progetto
+
+Fino a questa revisione `config/operating_point.yaml` conteneva
+`p_fuel_supply_bar: 8.0`. È un numero scritto a mano, e la fisica non lo
+produce a nessuna temperatura ragionevole di una bombola fresca: **8.00 bar
+sono la tensione di vapore del propano puro a 18.3 °C**. Sotto quella
+temperatura la bombola non eroga 8 bar, ne eroga meno, e l'intero punto
+operativo del motore era valido solo per giornate tiepide senza che nulla nel
+codice o nella documentazione lo dicesse.
+
+La pressione di una bombola non dipende da quanto liquido è rimasto dentro:
+dipende **solo** da temperatura e composizione, e vale `p_sat(T)`. Da questa
+revisione il campo si scrive `derived` e il valore lo calcola
+`zefiro.feed.supply_pressures` da `fuel.bottle.T_design_K`. Un numero esplicito
+è ancora ammesso — una misura di targa è un dato legittimo — ma viene
+**rifiutato se supera p_sat alla temperatura di progetto**. Il file di
+configurazione non può più esprimere una bombola che non esiste.
+
+Da p_sat discendono a cascata tre cose che prima erano indipendenti:
+
+| grandezza | prima | ora |
+|---|---|---|
+| pressione GPL | 8.00 bar (scritta) | p_sat(15 °C) = 7.315 bar (derivata) |
+| fondo scarico serbatoio aria | 6.0 bar (scelto) | = p_sat, 7.315 bar (derivato) |
+| tetto di camera | 6.96 bar | 6.361 bar |
+| portata d'aria alimentabile in 5 s | 71.8 g/s | 47.0 g/s |
+
+Il fondo scarico si pone uguale a p_sat perché è l'unico valore che non spreca
+niente: fermarsi più in alto butta via aria (e quindi durata della raffica)
+senza alzare p_c, che lo fissa comunque il GPL; scendere più in basso fa
+perdere il controllo al riduttore dell'aria **prima** che a quello del GPL, e
+la miscela va ricca in modo incontrollato proprio a fine raffica, con il motore
+già caldo.
+
+### 8sexies.2 Il risultato controintuitivo: la bombola va tenuta FRESCA
+
+Legare il fondo scarico a p_sat accoppia la temperatura della bombola alla
+durata della raffica, e il verso è l'opposto di quello che verrebbe da pensare.
+A spinta fissata a 50 N:
+
+| T bombola | p_sat | p_c | ε | Isp | portata aria | durata |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 °C | 4.74 bar | 4.13 bar | 1.291 | 128.2 s | 37.6 g/s | 12.9 s |
+| 10 °C | 6.37 | 5.54 | 1.502 | 139.1 | 34.7 | 9.3 s |
+| **15 °C** | **7.32** | **6.36** | **1.622** | **143.7** | **33.6** | **7.0 s** |
+| 20 °C | 8.36 | 7.27 | 1.751 | 147.9 | 32.6 | 4.3 s |
+| 25 °C | 9.52 | 8.28 | 1.890 | 151.7 | 31.8 | 1.3 s |
+
+Una bombola più calda alza p_c e l'Isp, ma il serbatoio d'aria deve fermarsi
+più in alto e la massa estraibile fra 10 bar e p_sat crolla. **Il requisito dei
+5 secondi cade esattamente a 18.8 °C.** La bombola va quindi immersa in un
+bagno d'acqua per tenerla *sotto* una soglia, non sopra.
+
+15 °C è la scelta: lascia il 40 % di margine sulla durata, mantiene ε = 1.62 e
+Isp = 143.7 s, ed è una soglia che si può garantire *dal basso*, cosa molto più
+facile che garantire un massimo.
+
+### 8sexies.3 La prova di tenuta topologica (`sdf/tenuta.py`)
+
+`is_watertight` dice che la superficie non ha bordi liberi. La caratteristica di
+Eulero dice quanti manici ha. **Nessuno dei due dice quale buco.** Un motore con
+il numero giusto di manici ma con l'acqua che comunica col gas dà esattamente lo
+stesso χ di uno sano.
+
+Il nuovo controllo fa quello che si fa in collaudo: tappa tutti gli attacchi,
+mette un gas traccia in un circuito alla volta e guarda dove arriva. Sul
+reticolo di voxel è un flood-fill: si etichettano le componenti connesse del
+vuoto (connettività a 6 facce, perché due voxel che si toccano per uno spigolo
+sono separati da una parete che c'è), poi si chiede a ogni dominio dichiarato in
+quale componente è finito. Le coppie che *devono* comunicare si dichiarano; le
+altre sono perdite; le componenti che nessuno rivendica sono sacche di polvere.
+
+Il controllo è intero — o le etichette coincidono o no — e vale solo se **non
+cambia con la risoluzione**: `tenuta.confronta` mette a confronto due prove a
+passi diversi ed è quella la firma di un verdetto valido.
+
+Ha trovato due difetti al primo colpo.
+
+**Difetto 1 — il circuito della gola era aperto sull'atmosfera.** Lo spessore
+del mantello si calcolava come `parete_calda + lato + parete_fredda`, e quella
+somma **non contava lo strato di ritorno** del circuito a U. Il mantello veniva
+quindi costruito spesso 3.4 mm (il massimo, dettato dal ramo di camera) mentre
+il ramo di gola ne chiedeva 4.0: lo strato di ritorno veniva tagliato
+dall'intersezione con il mantello, e tagliato proprio sulla sua faccia esterna,
+cioè sulla pelle del pezzo. Il raffreddamento della gola comunicava con l'aria
+per tutta la sua lunghezza.
+
+Perché non se n'era accorto nessuno: la superficie restava chiusa, il pezzo
+restava in una sola componente connessa, i volumi restavano plausibili, e il
+controllo della polvere diceva *«0 sacche chiuse su 1 componente di vuoto»* —
+che sembra un successo ed era invece il sintomo. **Una** sola componente di
+vuoto significa che il circuito dell'acqua e l'atmosfera sono la stessa cosa.
+
+**Difetto 2 — il collettore di inversione a U sporgeva oltre il labbro.** Un
+collettore è largo 3 mm e centrato su `x_centro`; centrandolo su `x_fine`, che
+sta a 0.5 mm dal labbro, sporgeva di 1.5 mm oltre il piano dove il mantello
+finisce, veniva tagliato e si apriva sulla faccia. Ora l'inversione sta tutta a
+monte di `x_fine`, e un controllo esplicito verifica che nessun collettore
+sbordi dal mantello.
+
+Un terzo difetto era del **controllo**, non del motore, e va tenuto agli atti
+perché un falso allarme su una prova di tenuta costa quanto un mancato allarme:
+i tappi si appoggiavano al raggio *massimo* del pezzo invece che a quello locale,
+e sul convergente galleggiavano nel vuoto 0.7 mm fuori dal motore lasciando la
+bocca dell'attacco aperta.
+
+### 8sexies.4 L'iniettore: da coassiale a getti trasversali
+
+Il vecchio iniettore era un coassiale a taglio. Per una coppia **gas-gas** è
+l'elemento con l'efficienza di mescolamento più bassa fra quelli provati (NASA
+CR-121234, Calhoon, Ito, Kors, 1973): premiscelato ed elementi a impatto stanno
+in cima, il coassiale con swirl in mezzo, il coassiale a taglio semplice ultimo.
+Il motivo è fisico: un coassiale affida il mescolamento alla crescita di uno
+strato di taglio, che è lenta e lineare. E questo motore **è limitato dal
+mescolamento**: il tempo chimico è 30–100 µs contro 391 µs di permanenza.
+
+Il nuovo iniettore sono **getti di GPL in flusso trasversale d'aria**, la
+configurazione dei getti di diluizione dei combustori, dimensionata sulla regola
+di Holdeman (*Prog. Energy Combust. Sci.* 19, 1993, 31–70):
+
+    C = (S/H)·√J = 2.5   per getti da un solo lato
+
+con `J` rapporto dei flussi di quantità di moto, `S` passo fra i getti e `H`
+altezza del condotto attraversato. Se C è piccolo i getti restano attaccati alla
+parete, se è grande attraversano il condotto e sbattono dall'altra parte: in
+mezzo c'è un solo valore.
+
+Quello che il dimensionamento **non** sceglie: le due velocità le fissa il salto
+di pressione disponibile (aria 151.8 m/s, GPL 121.6 m/s), le aree seguono dalle
+portate, e **J = 0.988 è un risultato, non un parametro** — salti uguali in
+frazione di p_c e densità vicine danno J ≈ 1 da soli.
+
+Quello che resta libero è il raggio di iniezione, e lì c'è l'invariante che
+governa tutto:
+
+    d_getto = 0.386 · H      e      H = f(A_aria, R)
+
+cioè, a portate e salti fissati, **il diametro dei fori dipende solo dal raggio
+a cui si inietta**, e cresce al diminuire del raggio. Da qui la strizione del
+corpo centrale da 3.93 a 3.10 mm: non è estetica, è il solo modo di portare i
+fori da 0.53 a 0.67 mm, cioè da sotto a sopra la soglia di stampabilità.
+
+Il punto scelto: **5 getti da 0.666 mm a R = 3.10 mm, condotto d'aria alto
+1.540 mm, C = 2.514 contro l'ottimo 2.5** (scarto 0.6 %). La regola di scelta è
+dichiarata prima di guardare i numeri: il *massimo* numero di getti che conserva
+il 10 % di margine sul diametro minimo stampabile (che è ancora un TODO, e
+progettare esattamente sul minimo che si crede di conoscere è progettare sul
+bordo di ciò che non si sa), e fra quelli il raggio con C più vicino
+all'ottimo. Con 4 getti un foro otturato toglierebbe il 25 % del combustibile su
+90° di camera; con 5 ne toglie il 20 % su 72°.
+
+Errore trovato e corretto nel dimensionamento stesso: l'area della corona
+d'aria era calcolata come `2πRH`, l'approssimazione di corona sottile. Qui H/R
+vale 0.5 e quella formula sbaglia l'area del 25 %; su un'area sbagliata del 25 %
+si sbaglia la velocità dell'aria del 25 %, J del 56 % e il passo dei getti del
+25 %. Ora è `π(R_e² − R_i²)`, esatta, e un test lo verifica.
+
+**Il premiscelato**, che sarebbe l'elemento migliore, è scartato con una
+motivazione e non per dimenticanza: fermare un ritorno di fiamma richiede
+passaggi più stretti della distanza di spegnimento, che per propano-aria
+stechiometrico a 6.4 bar è circa 0.3 mm, sotto la soglia di stampabilità. Il
+rischio non è la detonazione (la dimensione di cella del propano-aria è di
+decine di millimetri) ma una deflagrazione stabilizzata dentro il collettore.
+
+### 8sexies.5 I raccordi dimensionano la testa
+
+L'aria sono 33.6 g/s a 8.7 kg/m³, cioè **3.9 litri al secondo**. Il salto
+d'iniezione vale 0.954 bar ed è tutto quello che c'è, perché p_c è fissata a
+p_sat/1.15 senza margini nascosti. Quanto se ne mangia il solo raccordo:
+
+| filettatura | passaggio | velocità | Δp | % del salto |
+|---|---:|---:|---:|---:|
+| G1/8 | 5.0 mm | 196 m/s | 1.68 bar | impossibile |
+| G1/4 | 7.5 mm | 87 m/s | 0.332 bar | 35 % |
+| **G3/8** | **10.0 mm** | **49 m/s** | **0.105 bar** | **11 %** |
+| G1/2 | 13.0 mm | 29 m/s | 0.037 bar | 4 % |
+
+Si sceglie **G3/8** per l'aria e **G1/8** per il GPL (che a 0.14 l/s costa lo
+0.4 %). E qui succede la cosa che non si vede finché non si prova a montarci un
+tubo vero: il G3/8 vuole una guarnizione a legare da 21.2 mm di diametro
+esterno, quindi una faccia piana da 23 mm; la faccia sta su una bozza radiale, e
+la bozza deve appoggiare tutta sulla testa. **La testa non può quindi essere più
+corta di 23 mm**, mentre idraulicamente ne bastavano 6.5. È il raccordo a
+dimensionare la testa, non il contrario.
+
+Il GPL invece non ha bisogno di nessuna bozza: la sua filettatura sta sulla
+faccia di monte, che è la faccia appoggiata alla piastra di costruzione e quindi
+è già piana e perpendicolare all'asse dopo il taglio dal supporto. È già la sede
+della guarnizione, e non si spende niente per averla.
+
+Entrambi i fori si **stampano sottomisura** (1.2 mm sotto la punta) e si portano
+a quota con la punta prima di maschiare: un foro SLM esce più piccolo del
+nominale e con la parete rugosa, e maschiare in un foro rugoso dà un filetto
+storto.
+
+Resta aperto, ed è il prossimo numero da misurare: un tubo da 1/2" lungo 2 m
+vale già 0.12 bar, più del raccordo. **Il bilancio di pressione della linea
+d'aria è un elemento di progetto di primo ordine, non impiantistica** (TODO A e
+F).
+
+### 8sexies.6 Il costo, in grammi
+
+| | prima | ora |
+|---|---:|---:|
+| mantello | 3.4 mm | 4.0 mm (per contenere il ritorno della U) |
+| testa | piastra piena da 2.4 mm | testa d'iniezione da 23 mm |
+| massa 316L | ~106 g | ~192 g |
+
+Non è massa decorativa: 20 g vengono dalla correzione del difetto che apriva il
+circuito della gola, il resto dalla testa, e la testa è lunga 23 mm perché
+l'aria da 3.9 l/s vuole un G3/8. Su un dimostratore da banco non c'è un
+requisito di massa da violare, ma il numero va detto.
+
+Se servisse dimezzarlo, la strada c'è ed è quella dei motori veri: la testa
+d'iniezione diventa un pezzo separato, tornito in alluminio e imbullonato con
+una guarnizione di faccia. Qui si è scelto il pezzo unico.
+
+
+## 8septies. Revisione 0.5.0 — il raffreddamento a una canna sola
+
+Il vincolo che ha mosso tutto è banale: **l'impianto ha una canna sola**. Un
+ingresso, un'uscita. Il raffreddamento era a due rami in parallelo, che di
+attacchi ne vuole quattro.
+
+### Perché la serie, e perché il conto che la bocciava era sbagliato
+
+Il conto che aveva bocciato la serie alla prima stesura mandava la portata piena
+nei canali della camera **dimensionati per la portata ridotta del parallelo**:
+0.8 mm a 14.5 m/s, 2.5 bar di caduta contro i 4 della rete. Ridimensionati per la
+portata vera, la caduta della camera crolla e la serie diventa la soluzione
+migliore, non un ripiego:
+
+* **un solo ingresso e una sola uscita nascono da soli**;
+* **sparisce la strozzatura di bilanciamento.** Due rami in parallelo hanno per
+  definizione la stessa caduta: se le cadute progettate sono diverse, l'acqua va
+  quasi tutta nel ramo che oppone meno resistenza — cioè via dalla gola. Quel
+  foro calibrato da 2.30 mm è un pezzo che DEVE essere giusto, e se sbagliato non
+  si vede: portata e temperatura all'uscita restano normali mentre il labbro non
+  è più raffreddato. In serie non c'è niente da bilanciare;
+* **la camera raffredda meglio**: esce dal regime di transizione (Re ≈ 1150,
+  dove Dittus-Boelter è meno affidabile) ed entra in turbolenza piena.
+
+Il riscaldamento dell'acqua sull'intero giro vale **5.9 K** su 3.69 kW: l'ordine
+dei due tratti è termicamente indifferente, quindi si sceglie quello che rende la
+geometria pulita.
+
+### Il percorso, e perché è quello
+
+    canna -> anello d'ingresso -> camera -> raccordo -> gola
+          -> inversione al labbro -> ritorno -> anello d'uscita -> canna
+
+Ogni elemento è adiacente al successivo, e **non è una comodità**: le stazioni
+assiali dei collettori si intrecciano, e qualunque condotto che unisca due
+stazioni non adiacenti scavalca il collettore di un altro tratto. Per non aprirlo
+dovrebbe passargli fuori, e allora serve un collare; con l'ordine giusto il
+problema non si pone.
+
+### Il canale più piccolo, non quello che cade di meno
+
+A portata imposta la prima versione sceglieva il canale con la caduta minima.
+È l'opposto di quello che serve. La caduta di un canale è anche il **riferimento**
+rispetto a cui si giudica la caduta lungo l'anello che lo alimenta: se il canale
+cade 0.02 bar, l'anello deve cadere meno di 0.002, e per riuscirci gli serve una
+sezione enorme — cioè un collare esterno che pesa più di cento grammi. Con un
+canale più stretto la stessa uniformità si ottiene con un anello molto più
+piccolo. Si prende quindi il più piccolo che sta nel budget di caduta.
+
+### La sezione di un vano anulare non è un rettangolo
+
+Il tetto di un vano è rivolto verso la piastra e deve arretrare di
+`tan(52°)` per unità di altezza: sezione a **trapezio**, `L h − p h²/2`, massima
+in `h = L/p`. Se anche il pavimento è inclinato — perché sotto c'è la rampa con
+cui un collare esterno nasce dal corpo — la sezione diventa un **rombo**,
+`L h − p h²`: **metà area a parità di lunghezza**. È il motivo per cui il
+raccordo camera→gola si fa DENTRO il mantello (dove il pavimento è appoggiato su
+materiale pieno) e costa zero, mentre l'anello d'uscita deve stare fuori e paga.
+
+### I cinque difetti, e come sono stati trovati
+
+Nessuno di questi si vede nei volumi, nella superficie chiusa o nel conteggio dei
+componenti: il pezzo restava chiuso, di un pezzo solo, con i volumi giusti. Li ha
+trovati un **tracciatore di cammino**: parte da uno spigolo della griglia
+(l'esterno), si propaga nel vuoto un voxel alla volta e si ferma appena tocca
+l'acqua, dicendo *dove*.
+
+1. **Il plenum in testa stava in aria.** La testa non è un disco del diametro del
+   mantello: è un cilindro da 10.5 mm di raggio che si allarga a cono solo
+   nell'ultimo tratto. Il plenum, piazzato al raggio del collettore della camera,
+   era fuori dal materiale. In più il raccordo dell'aria è un foro radiale da
+   14 mm che attraversa la piastra, e un plenum anulare completo ci passa dentro.
+   → ingresso e uscita hanno ora la **stessa forma**, scritta una volta sola.
+2. **Il pavimento del vano coincideva con la faccia inferiore del collare.** Il
+   collare parte un po' più dentro del vano per agganciarsi al mantello, e
+   contando la rampa da lì la sua faccia inferiore si spostava di
+   `pendenza × 2 × passo_griglia`. La parete diventava
+   `parete − pendenza × 2 × passo`, cioè **una funzione della risoluzione**: a
+   0.25 mm restavano 0.36 mm e sembrava tutto a posto, a 0.35 mm andava a zero.
+3. **I fori d'ingresso uscivano dal fianco della rampa.** A 1.5 mm dalla faccia
+   d'iniezione la rampa del collare è appena cominciata. → i fori d'ingresso
+   **salgono con la stessa pendenza della rampa**: le restano paralleli e sono
+   autosostentati per definizione.
+4. **I fori finivano al bordo esterno dell'anello** invece che a metà, e il loro
+   raggio li faceva sporgere di un quarto di millimetro oltre la parete.
+5. **La sede del portagomma, due volte.** Il foro è a goccia e l'apice sta
+   `pendenza × raggio` sopra il centro: prima l'apice usciva dal collare, poi —
+   aggiunto il vincolo opposto per garantire la connessione — usciva il fondo.
+   Sono **due vincoli di segno opposto**, e la loro combinazione decide il
+   *diametro*, non la portata.
+
+### Perché i due attacchi hanno orientamento diverso... e poi no
+
+L'ingresso era assiale sulla faccia della testa, l'uscita radiale. Poi la testa
+si è rivelata troppo piccola (§ difetto 1) e sono diventati entrambi radiali, a
+180° dal raccordo dell'aria. Un foro orizzontale si stampa **a goccia** — cerchio
+più tetto a due falde — perché uno tondo ha in cima una superficie rivolta in
+basso e tangente alla piastra: lo sbalzo peggiore possibile. Sotto il gambo c'è
+una **mensola**, che non è un supporto di stampa da togliere: è materiale del
+pezzo, e regge anche il tiro della canna.
+
+### Che cosa costa
+
+Massa da 192 a 278 g. Gli 86 grammi sono i due collari. Caduta totale della serie
+0.87 bar contro un budget di 1.0.
+
+### Il film del plug: una domanda che mancava
+
+Il modello del film dimensiona la fessura e verifica che protegga. **Non si
+chiedeva da dove arrivasse il combustibile.** Il film esce nella stessa camera dei
+getti principali, quindi vede lo stesso salto di pressione: per passare 0.18 g/s
+sotto 0.95 bar gli serve una sezione di **0.154 mm²**, cioè un foro da 0.44 mm,
+mentre il minimo stampabile assunto è 0.66 mm — **0.342 mm², più del doppio**.
+Non esiste "meno di un foro". Finché non è deciso come strozzarlo, la frazione di
+film è un desiderio e non una portata.
+
+Nello stesso controllo sono emersi due limiti di validità della correlazione:
+**Re_s = 934** contro i ~10⁴ sotto cui Stollery & El-Ehwany (turbolenta) non si
+applica, e **M = 0.18** contro un campo tipico di 0.5–2. E Re_s **non dipende
+dall'altezza della fessura** — vale `mdot/(2πRμ)` — quindi non si aggiusta con la
+geometria: un film laminare su questo motore è una conseguenza della sua taglia.
+
+### L'interfaccia di montaggio
+
+Fino a questa revisione il motore non si attaccava a niente: era un pezzo
+bellissimo da tenere in mano. Quattro bracci sulla faccia di monte, a 45, 135,
+225 e 315 gradi — gli assi a 0 e 180 sono già occupati dal bocchettone dell'aria
+e dalle canne dell'acqua, e ne servono almeno tre per definire un piano.
+
+Perché quella faccia: **si costruisce lungo +x con la faccia d'iniezione sulla
+piastra**, quindi un rilievo lì è la prima cosa che si costruisce e non ha
+nessuno sbalzo; la spinta è diretta verso monte, quindi il vincolo lavora **in
+compressione**; ed è l'estremità fredda. Una flangia radiale a metà camera
+avrebbe una corona rivolta verso il basso larga quanto la flangia, e per
+smussarla a 52° servirebbero 12 mm di corsa assiale che fra i due collari
+dell'acqua non ci sono.
+
+Tre criteri che non sono quelli che sembrano:
+
+* **il diametro dei bulloni non lo decide la resistenza.** Il carico di progetto
+  è 250 N per bullone (20× la spinta diviso quattro, perché il carico vero non è
+  la spinta ma le mani, i tubi che tirano e il colpo d'ariete, nessuno dei quali
+  è calcolato) e chiederebbe **1.4 mm di nocciolo**. La M5 la sceglie l'officina;
+* **il raggio del cerchio dei bulloni lo decide la chiave.** I fori sono
+  **passanti** e la filettatura sta nel dado: un filetto stampato non tiene il
+  passo, e uno maschiato in un foro cieco di acciaio sinterizzato si sfoglia al
+  primo serraggio — e se il maschio si spezza dentro, il pezzo è perso. Dietro
+  serve quindi spazio per una chiave, e il corpo della testa ha raggio 10.5 mm;
+* **quattro bracci e non una corona**: 3.9 g contro 35, a parità di carico
+  assiale, perché i bracci lavorano a compressione nel proprio piano.
+
+Il prezzo: il raccordo del GPL è assiale al centro della stessa faccia, quindi
+**la piastra di banco deve avere un foro centrale**.
+
+### Il confronto fra risoluzioni deve raffinare, non ingrossare
+
+Il sintetizzatore ricostruisce la geometria a due passi di griglia e accetta un
+verdetto solo se non cambia. Il secondo passo era `passo × 1.25`, cioè una
+griglia **più grossa**: su un pezzo con pareti da 1 mm e canali da 0.8, una
+griglia da 0.31 mm non risolve più niente e produce sacche chiuse e componenti di
+vuoto che a 0.25 non esistono. Il confronto dichiarava "verdetto non stabile" — e
+aveva ragione, ma sulla griglia sbagliata: stava misurando che la griglia grossa
+è grossa, cosa che si sapeva.
+
+La domanda vera è se la risposta è **convergiuta**, e a quella si risponde
+raffinando. Con `passo / 1.25`, cinque verifiche passano da fallite a passate
+senza che la geometria sia cambiata di un micron: tenuta, tenuta del circuito
+GPL, evacuabilità della polvere, pulizia della costruzione, area di gola.
+
+Il controllo non era inutile — ha comunque impedito di consegnare uno STL
+sbagliato. Sbagliava solo il modo di chiedersi se poteva fidarsi.
+
+### La CFD di mescolamento
+
+Due lezioni, entrambe metodologiche.
+
+**Il passo temporale è una diagnosi.** La prima corsa si è impantanata a
+2.7 picosecondi per passo con `Courant medio 2.9e-6` e `massimo 0.40`: una cella
+su un milione decideva il passo di tutte le altre. Non era la mesh
+(`checkMesh` OK, rapporto d'aspetto 4.97). Era la temperatura, uscita a 203–334 K
+in un caso non reattivo con ingressi a 283 e 293 K, e con `Tlow` del polinomio
+proprio a 200 K: la soluzione oscillava **sul bordo dell'estrapolazione**. Ora
+`Tlow` sta a 150 K e ci sono limiti dichiarati in `fvOptions` che **stampano
+quante celle toccano** — se sono tante, il risultato non vale, e si vede.
+
+**Un getto trasversale non è stazionario.** La disuniformità letta a un istante
+qualunque può valere il doppio di quella letta un microsecondo dopo. `sezioni.py`
+media sull'ultimo terzo della corsa e lo confronta col terzo precedente: se le due
+medie non coincidono entro il 10 %, dichiara che il transitorio non è finito e che
+il numero non vale. Lo scarto tipo dentro la finestra è l'ampiezza vera
+dell'oscillazione del getto, che è un'informazione fisica.
+
+## 8octies. Revisione 0.6.0 — la CFD stava simulando un altro motore
+
+Tre corse di fila si sono fermate allo stesso istante (56.2 µs) con la stessa
+firma: Courant medio 3·10⁻⁶, massimo 0.40, passo temporale da 9.5 ns a 3 ps.
+Una cella su un milione decideva il passo di tutte.
+
+### La diagnosi sbagliata, e perché era sbagliata
+
+La prima diagnosi è stata "riflessione acustica sullo sbocco": 18.6 mm / 343 m/s
+= 54 µs è un transito acustico del dominio, e lo sbocco era `p: fixedValue`,
+cioè uno specchio perfetto. Il numero tornava, la fisica era plausibile, la cura
+(`waveTransmissive`) era comunque giusta in sé. **Era sbagliata lo stesso**: la
+corsa rifatta si è fermata a 56.2 µs invece che a 56.6.
+
+Una coincidenza numerica che torna non è una diagnosi. La diagnosi è arrivata
+solo chiedendo al solutore *dove*:
+
+```
+mpirun -np 24 postProcess -parallel -func 'fieldMinMax(fields=(U p T k),location=true)'
+```
+
+| t [µs] | min(p) | dove |
+|---|---|---|
+| 50.0 | 2.86 bar | cella 42263, proc 12, (−3.069, 1.649, 2.085) mm |
+| 52.5 | 1.91 bar | la stessa |
+| 55.0 | 0.49 bar | la stessa |
+| 56.2 | **1.0·10⁻⁴ bar** | la stessa |
+
+x = −3.07 mm, r = 2.658 mm: il **labbro del foro del getto**, 0.24 mm a valle
+dell'asse del getto, esattamente su `R_getti` = 2.646 mm. Non lo sbocco.
+
+### Il meccanismo
+
+Gli ingressi avevano `U: fixedValue` e `p: zeroGradient`. In un solutore
+comprimibile il flusso di massa entrante vale ρ·U·S con ρ = ψ·p preso dalla
+cella interna: **se p scende entra meno massa, e se entra meno massa p scende
+ancora**. È un anello di reazione positivo. Dove lo strato di taglio separa si
+innesca, e con `hePsiThermo` ρ → 0 porta il Courant → ∞.
+
+Il limitatore di velocità che avevo aggiunto per contenere il problema lo stava
+**nascondendo**: |U| restava inchiodata a 400.000 m/s (cioè lavorava a ogni
+passo) mentre la pressione scendeva indisturbata. `limitVelocity` taglia U senza
+correggere né φ né p, quindi viola la conservazione della massa proprio dove
+serviva conservarla. È stato tolto.
+
+### Il difetto vero, che il primo non lasciava vedere
+
+Cercando la cura è saltato fuori qualcosa di peggio. Il sintetizzatore calcola
+le aree d'iniezione con
+
+    A = ṁ / (C_d · ρ · V),   C_d = 0.75
+
+quindi `d_getto` e l'altezza dell'anello sono aree **geometriche**, mentre
+`V_getto` e `V_aria` sono le velocità **ideali** attraverso l'area *efficace*
+C_d·A. La mesh usa l'area geometrica; la condizione al contorno imponeva la
+velocità ideale. Risultato, misurato:
+
+    ṁ_CFD / ṁ_progetto = 1.33333 = 1/C_d   su ENTRAMBI i flussi
+
+La CFD soffiava il 33 % di portata in più. Nessun controllo poteva accorgersene:
+`checkMesh` diceva "Mesh OK", il solutore produceva numeri, le pressioni
+sbagliate (punte a 18.6 bar contro 7.3 bar di alimentazione) sembravano rumore
+del transitorio.
+
+Cosa restava valido: **J = 0.988 e C = 2.50**, perché i due flussi erano scalati
+dello stesso fattore e sono rapporti. Cosa non lo era: pressioni, salto
+d'iniezione, velocità in camera (33 % alta), tempo di residenza, e quindi la
+lunghezza di mescolamento in millimetri.
+
+### La cura, che è una sola per tutti e due i problemi
+
+`flowRateInletVelocity` con la **portata di progetto**. Fissa φ = ṁ
+indipendentemente da p — l'anello si spezza alla radice — e rimette la portata
+al valore giusto. Le velocità scendono di C_d su entrambi i flussi (aria
+151.8 → 113.9 m/s, getto 121.6 → 91.2 m/s) quindi **J e C non cambiano di una
+cifra**. Il caso lo verifica da solo e si rifiuta di partire se J si scosta di
+più del 3 %: se un giorno il sintetizzatore usasse due C_d diversi, la
+condizione cadrebbe in silenzio.
+
+Che poi ṁ/(ρA) sia la velocità giusta, per l'anello è certo: l'anello è un
+**condotto**, l'aria lo riempie tutto. Per il getto il foro è lungo 1.00 mm con
+d = 0.731 mm (L/d = 1.37), al limite del riattacco: **TODO da misurare**. Se non
+riattacca, la portata è la stessa ma C sale a 3.33, cioè sopra l'ottimo di
+Holdeman — sovra-penetrazione.
+
+Al posto del limitatore di velocità: `pMin` = 1 bar e `pMax` = 50 bar nel
+PIMPLE. Il campo lavora fra 6.36 e 7.32 bar, tutto subsonico: 1 bar non è
+raggiungibile da nessun processo fisico dentro questo dominio. È un limite sulla
+variabile che diverge davvero. (Attenzione alla sintassi: `pressureControl` li
+legge con `readScalar`, quindi scalari nudi — la forma con nome e dimensioni fa
+abortire tutti i processi al primo passo.)
+
+Effetto misurato sul rapporto Courant max/medio, che era la firma della cella
+patologica: **130 000 → 710**.
+
+### Due tempi caratteristici, non uno
+
+Calcolando quanto far durare la corsa è emerso che il dominio ne ha due, e
+differiscono di venti volte:
+
+| zona | area | velocità | lavaggio |
+|---|---|---|---|
+| anello d'iniezione (−6.6 → 0 mm) | 36.1 mm² | 120 m/s | **55 µs** |
+| camera (0 → 12 mm) | 410.0 mm² | 10.6 m/s | **1132 µs** |
+
+La camera ha 11.4 volte l'area dell'anello. Un verdetto unico "il transitorio è
+finito" per tutti i piani è quindi sbagliato in partenza. `sezioni.py` adesso
+calcola per ogni piano il **tempo di lavaggio** — volume a monte diviso portata,
+esatto in forma chiusa su questa geometria — e marca ogni riga come *matura*
+(≥ 3 lavaggi), *acerba* o *non ancora raggiunta*; il verdetto finale si rifiuta
+di uscire su un piano acerbo, distinguendo "manca il dato" da "il dato c'è ma
+non è ancora un risultato".
+
+Attenzione a non confonderlo con il tempo di **arrivo** del combustibile: il
+fronte viaggia sul nucleo veloce e a 30 µs era già a x = +5 mm, dove il lavaggio
+vale 500 µs. Ma una media e uno scarto su un piano dipendono da tutto il fluido
+a monte, non dalla punta.
+
+Conseguenza operativa, dichiarata invece che scoperta a posteriori:
+
+- **Rispondibile** in ~3 ore: la penetrazione e il mescolamento entro la
+  lunghezza di Holdeman. I piani di misura stanno fra −2.5 e 0 mm e il più
+  lontano chiede 165 µs; `endTime` = 250 µs ne dà 4.5 lavaggi.
+- **Non rispondibile così**: l'uniformità in gola. Servirebbero ~4.5 ms, cioè
+  ~40 ore, e il ricircolo è più lento della media quindi anche di più. Per la
+  camera lo strumento è un calcolo **stazionario**, che non deve marciare
+  attraverso il transitorio.
+
+## 10. Il sintetizzatore: `progetta(requisiti) -> Progetto | Rifiuto`
+
+Fino alla revisione 0.4.0 il motore da 50 N era **uno script**, `build_50N.py`,
+con dentro trenta costanti scelte a mano e commentate bene. Non era un modello:
+era *un* progetto scritto molto bene. La differenza si vede provando a chiedere
+un motore diverso.
+
+### 10.1 Il rifiuto è parte del contratto
+
+`progetta` può restituire un `Rifiuto`, e questa non è una gestione d'errore: è
+la sola difesa che resta a un modello che gira dodici ore senza nessuno che
+guardi. Un sintetizzatore che restituisce sempre una geometria è un
+sintetizzatore che inventa i dati che non ha, e la geometria che consegna è
+credibile e falsa.
+
+I rifiuti che il modello sa dare, tutti incontrati davvero durante la scrittura:
+
+| requisito | rifiuto |
+|---|---|
+| mancano `T` a valle dei riduttori o i `Cd` | elenco di **tutti** i dati mancanti insieme, non uno alla volta |
+| spinta 25 N | i getti scenderebbero a 0.61 mm contro i 0.66 stampabili: **servono almeno ~30 N**, oppure fori realizzati dopo la stampa |
+| spinta 500 N | 336 g/s d'aria sono 39 l/s: nemmeno un G1 li porta senza mangiarsi il salto d'iniezione |
+| parete minima di processo 3 mm | in gola non esiste parete possibile: il salto termico supererebbe il limite a qualunque spessore stampabile |
+
+### 10.2 Ogni quota porta con sé da dove viene
+
+`sintesi/provenienza.py`. Ogni numero è una `Scelta` con la sua origine —
+*derivata*, *da norma*, *misurata*, *decisa*, *mancante* — e il suo motivo.
+Guardando uno STL le tre cose sono indistinguibili, ed è esattamente così che si
+consegna un pezzo bellissimo e sbagliato: il numero inventato ha lo stesso
+aspetto di quello dimostrato.
+
+Due invarianti che il tipo impone da solo:
+
+- **una quota senza motivo non si può nemmeno costruire.** Non "larghezza del
+  canale", ma "1.0 mm perché sotto quel numero il setto supera i 120 K di salto";
+- **una quota dichiarata mancante deve valere `NaN`.** Un segnaposto numerico si
+  propaga nei conti e produce un risultato credibile e falso.
+
+Per Zefiro il referto dice: **55 quote, 85 % derivate, 9 % decise, 5 % da norma,
+0 mancanti.** Le cinque decise si contano su una mano e ognuna ha la sua ragione
+scritta accanto — sono quelle da attaccare per migliorare il modello.
+
+### 10.3 Cosa il modello ha scoperto ridimensionando Zefiro da solo
+
+Il punto operativo lo ha ritrovato **identico** a quello ricavato a mano
+(p_c 6.361 bar, Isp 143.7 s, ε 1.622, 7.00 s di raffica) e l'iniettore quasi
+identico (5 getti da 0.666 mm, C = 2.500 contro l'ottimo 2.5). Il
+raffreddamento no, ed è lì che ha trovato tre cose.
+
+**1. Avevo la causalità del raffreddamento all'incontrario.** Alla prima
+stesura derivavo la portata d'acqua dal salto di temperatura voluto e da lì il
+numero di canali. Il modello ha rifiutato il progetto, e aveva ragione: **in
+gola la portata non la decide il salto entalpico, la decide il coefficiente di
+scambio.** Servono 51 kW/m²K, la velocità che li produce è quella, l'area segue,
+e il salto di temperatura che ne risulta sono 2.2 K — l'acqua esce quasi fredda.
+Derivare la portata dai 30 K voluti dava un decimo dell'acqua necessaria.
+
+**2. La parete calda va fatta la più sottile, non la più spessa.** La prima
+regola restituiva il massimo spessore compatibile col limite termico, e per la
+camera dava 4 mm. È un errore di verso: una parete calda spessa fa danno tre
+volte — più salto di temperatura, più tensione termica, più massa — e la
+pressione non la chiede (6 MPa di cerchio contro 110 di snervamento a caldo).
+
+**3. I due rami in parallelo non si bilanciano.** Il ramo camera cade 0.020 bar,
+quello di gola 0.202. In parallelo la caduta è la stessa per entrambi: senza
+niente in mezzo, l'acqua va quasi tutta nel ramo scarico e **non in gola**, che
+è il ramo che ne ha bisogno. Il modello dimensiona la strozzatura di
+bilanciamento che pareggia il conto: **un foro calibrato da 2.30 mm** all'ingresso
+del ramo camera. Nessuno se n'era accorto, e il progetto a mano aveva lo stesso
+difetto con un rapporto di 6.7 a 1.
+
+### 10.4 Il cancello
+
+Le verifiche non stanno più in coda a uno script, dove le legge un umano. Un
+umano che legge trenta righe di referto legge anche *«polvere evacuabile: True
+(0 sacche chiuse su 1 componenti di vuoto)»* e pensa che sia un successo, mentre
+è il sintomo di un circuito di raffreddamento aperto sull'atmosfera. Un cancello
+non si distrae.
+
+Sedici verifiche, dieci analitiche (millisecondi, si fanno sempre) e sei
+geometriche (minuti, e **a due risoluzioni**: un verdetto che cambia col passo
+non è un verdetto). Una verifica può uscire *non conclusiva* — tipicamente
+perché la griglia non risolve il dettaglio che doveva controllare — e non conta
+come superata.
+
+### 10.5 Un bound tabellato che nascondeva un problema
+
+Il tetto di `p_c` nella scatola di ricerca valeva 7.0 bar perché seguiva un
+impianto in cui la bombola stava a 8 bar. Con una bombola a 20 °C il tetto vero
+è 7.27 bar, e il sintetizzatore veniva bloccato da un numero tabellato invece
+che dalla fisica. Tolto il tappo, è saltato fuori subito il problema che
+nascondeva: il campionamento del DoE generava punti in cui il combustibile non
+può entrare in camera. Non era un difetto del campionamento — era che la scatola
+non era quella giusta. Ora `bounds_per_impianto` la restringe all'impianto che
+si ha davvero, e a trovarlo è stato un test.
+
+### 10.6 Quello che ancora non c'è
+
+- **Una seconda architettura.** Finché il registro ne contiene una, l'astrazione
+  è una promessa: si scopre che cosa era davvero generale solo aggiungendo la
+  seconda.
+- **L'anello lungo.** Ricerca multi-obiettivo su L0 dentro l'inviluppo dei
+  requisiti, con verifica L1 in CFD del punto scelto. `l1/cfd.py` è ancora un
+  segnaposto e OpenFOAM sotto WSL2 non è mai stato visto girare: va provato
+  prima di prometterlo.
+- **L'interfaccia di montaggio.** Il motore non ha nessun modo di essere fissato
+  a un banco. Reso evidente dallo spaccato LEAP 71, non ancora fatto.
+- **La validazione contro un banco.** Il modello è coerente con le correlazioni
+  che ha dentro. Di quanto sbaglino lo dirà il primo fuoco.
+
+
 ## 9. Storia delle versioni di schema
 
 | Versione | Data | Cambiamento |
